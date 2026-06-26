@@ -90,6 +90,31 @@ fresh data; your columns survive.
 | 4 | Merge failure: existing eval could not be preserved (hard stop). |
 | 5 | Google Sheets failure (CSV still written). |
 
+## Weekly auto-update (macOS)
+
+To keep a set's sheet fresh while its 17Lands data matures, a launchd agent runs
+the refresh every Monday at 09:00 local. It runs on your Mac (it needs your
+cached OAuth token and writes to your Drive), so:
+
+1. Finish the Google Sheets setup above and run `uv run mtg-eval MSH` once
+   interactively to mint the token.
+2. **Publish the OAuth app** (OAuth consent screen > Publishing status > Publish
+   app). While the app is in "Testing", Google expires refresh tokens after 7
+   days, which would break an unattended weekly job. Publishing it (you can
+   click through the "unverified app" notice; it is your own app) keeps the
+   token alive.
+3. Install the agent:
+   ```bash
+   cp scripts/com.mtg-eval.mtg-eval.weekly.plist ~/Library/LaunchAgents/
+   launchctl load ~/Library/LaunchAgents/com.mtg-eval.mtg-eval.weekly.plist
+   ```
+
+It refreshes `MSH` by default and best-effort commits/pushes the updated CSV.
+Logs land in `~/.config/mtg-eval/weekly.log`. To track a different set later,
+edit `SET` in `scripts/weekly-update.sh`. To change the day/time, edit the
+`StartCalendarInterval` in the plist and reload. To stop it:
+`launchctl unload ~/Library/LaunchAgents/com.mtg-eval.mtg-eval.weekly.plist`.
+
 ## How the data joins
 
 - Scryfall is the spine, keyed by `(set, collector_number)`.
