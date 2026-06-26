@@ -37,7 +37,15 @@ COMMONS_TAB = "Commons"
 UNCOMMONS_TAB = "Uncommons"
 COLOR_TAB = "Best Color"
 PAIRS_TAB = "Color Pairs"
-ALL_TABS = [CARDS_TAB, COMMONS_TAB, UNCOMMONS_TAB, COLOR_TAB, PAIRS_TAB]
+ARCHETYPES_TAB = "Archetypes"
+ALL_TABS = [
+    CARDS_TAB,
+    COMMONS_TAB,
+    UNCOMMONS_TAB,
+    COLOR_TAB,
+    PAIRS_TAB,
+    ARCHETYPES_TAB,
+]
 
 # Cards tab columns, in display order. (set / collector_number kept at the end so
 # the sheet is self-sufficient for the preserve-my-eval merge key.)
@@ -256,30 +264,31 @@ def _build_card_values(df: pd.DataFrame) -> list[list]:
 
 
 def _rarity_chart_values(df: pd.DataFrame, rarity: str) -> list[list]:
-    """Table [Rank, Card, GIH WR, Set Avg] for one rarity, sorted by GIH WR desc.
+    """Table [Preview, Card, GIH WR, Set Avg] for one rarity, sorted by GIH WR desc.
 
-    Rank (a numeric x) lets the chart plot one dot per card; Set Avg is a constant
-    column so it renders as a flat reference line. The Card cell is a HYPERLINK to
-    Scryfall so you can preview it from the chart table.
+    Preview is an inline card image; Card is a HYPERLINK to Scryfall and doubles
+    as the chart's x-axis label; Set Avg is a constant column so it draws as a
+    flat line through the card dots.
     """
     sub = df[df["rarity"].astype(str) == rarity].copy()
     sub["_gih"] = pd.to_numeric(sub["gih_wr"], errors="coerce")
     sub = sub.dropna(subset=["_gih"]).sort_values("_gih", ascending=False)
-    header = ["Rank", "Card", "GIH WR", "Set Avg"]
+    header = ["Preview", "Card", "GIH WR", "Set Avg"]
     if sub.empty:
         return [header]
     avg = round(float(sub["_gih"].mean()), 4)
     rows = [header]
-    for i, (_, r) in enumerate(sub.iterrows(), start=1):
+    for _, r in sub.iterrows():
         name = _cell(r["name"])
         uri = _cell(r.get("scryfall_uri"))
+        img = _cell(r.get("image_url"))
+        preview = f'=IMAGE("{img}",4,98,70)' if img else ""
         card = f'=HYPERLINK("{uri}","{name}")' if uri else name
-        rows.append([i, card, round(float(r["_gih"]), 4), avg])
+        rows.append([preview, card, round(float(r["_gih"]), 4), avg])
     return rows
 
 
-def _color_table_values(colors_df: pd.DataFrame) -> list[list]:
-    table = scoring.color_table(colors_df)
+def _color_table_values(table: pd.DataFrame) -> list[list]:
     rows = [["Color", "Win Rate", "Games"]]
     for _, r in table.iterrows():
         wr = r["win_rate"]
@@ -288,14 +297,65 @@ def _color_table_values(colors_df: pd.DataFrame) -> list[list]:
     return rows
 
 
-def _combo_table_values(colors_df: pd.DataFrame) -> list[list]:
-    table = scoring.combo_table(colors_df)
+def _combo_table_values(table: pd.DataFrame) -> list[list]:
     rows = [["Archetype", "Win Rate", "Games"]]
     for _, r in table.iterrows():
         wr = r["win_rate"]
         rows.append([_cell(r["archetype"]), round(float(wr), 4) if pd.notna(wr) else "",
                      _cell(r["games"])])
     return rows
+
+
+def _img_formula(url: str) -> str:
+    return f'=IMAGE("{url}",4,98,70)' if url else ""
+
+
+def _link_formula(uri: str, label: str) -> str:
+    return f'=HYPERLINK("{uri}","{label}")' if uri else label
+
+
+def _archetype_values(df: pd.DataFrame) -> tuple[list[list], list[int]]:
+    """Per-guild top-5 commons and uncommons, laid out side by side with images.
+
+    Returns (values, header_row_indexes). Each guild is a titled block:
+        <Guild (XY)>
+        Top Commons              | Top Uncommons
+        [img] name        GIH WR | [img] name        GIH WR   (x5)
+    Columns: 0 img / 1 name / 2 gih  (commons) and 4 img / 5 name / 6 gih (uncommons).
+    """
+    rows: list[list] = []
+    header_rows: list[int] = []
+    blank = ["", "", "", "", "", "", ""]
+
+    for pair, name in scoring.GUILD_PAIRS:
+        commons = scoring.guild_top_cards(df, pair, "common", 5)
+        uncommons = scoring.guild_top_cards(df, pair, "uncommon", 5)
+
+        header_rows.append(len(rows))
+        rows.append([f"{name} ({pair})", "", "", "", "", "", ""])
+        rows.append(["Top Commons", "", "", "", "Top Uncommons", "", ""])
+
+        for i in range(5):
+            left = ["", "", ""]
+            if i < len(commons):
+                c = commons.iloc[i]
+                left = [
+                    _img_formula(_cell(c["image_url"])),
+                    _link_formula(_cell(c["scryfall_uri"]), _cell(c["name"])),
+                    round(float(c["gih_wr"]), 4) if pd.notna(c["gih_wr"]) else "",
+                ]
+            right = ["", "", ""]
+            if i < len(uncommons):
+                u = uncommons.iloc[i]
+                right = [
+                    _img_formula(_cell(u["image_url"])),
+                    _link_formula(_cell(u["scryfall_uri"]), _cell(u["name"])),
+                    round(float(u["gih_wr"]), 4) if pd.notna(u["gih_wr"]) else "",
+                ]
+            rows.append(left + [""] + right)
+        rows.append(blank)
+
+    return rows, header_rows
 
 
 # --- chart + format requests --------------------------------------------------
@@ -317,12 +377,12 @@ def _src(sheet_id: int, n_rows: int, c: int) -> dict:
     }
 
 
-def _scatter_chart_request(sheet_id: int, title: str, n_rows: int) -> dict:
-    """SCATTER chart: one dot per card (x = rank, y = GIH WR) plus a flat average.
+def _dots_line_chart_request(sheet_id: int, title: str, n_rows: int) -> dict:
+    """One dot per card (x = card name, y = GIH WR) with the average as a line.
 
-    Table layout is [Rank, Card, GIH WR, Set Avg]: domain = Rank (col 0), the
-    card dots = GIH WR (col 2), and the average reference = Set Avg (col 3). Dots
-    above the average band are the above-average cards.
+    Table layout is [Preview, Card, GIH WR, Set Avg]. A COMBO chart with the card
+    series drawn as points only (invisible connecting line) and the average drawn
+    as a solid line through them, so above/below-average cards read at a glance.
     """
     return {
         "addChart": {
@@ -330,16 +390,27 @@ def _scatter_chart_request(sheet_id: int, title: str, n_rows: int) -> dict:
                 "spec": {
                     "title": title,
                     "basicChart": {
-                        "chartType": "SCATTER",
+                        "chartType": "COMBO",
                         "legendPosition": "BOTTOM_LEGEND",
                         "headerCount": 1,
-                        "domains": [{"domain": _src(sheet_id, n_rows, 0)}],
+                        "domains": [{"domain": _src(sheet_id, n_rows, 1)}],
                         "series": [
-                            {"series": _src(sheet_id, n_rows, 2), "targetAxis": "LEFT_AXIS"},
-                            {"series": _src(sheet_id, n_rows, 3), "targetAxis": "LEFT_AXIS"},
+                            {
+                                "series": _src(sheet_id, n_rows, 2),
+                                "type": "LINE",
+                                "targetAxis": "LEFT_AXIS",
+                                "lineStyle": {"type": "INVISIBLE"},
+                                "pointStyle": {"size": 5, "shape": "CIRCLE"},
+                            },
+                            {
+                                "series": _src(sheet_id, n_rows, 3),
+                                "type": "LINE",
+                                "targetAxis": "LEFT_AXIS",
+                                "lineStyle": {"type": "SOLID", "width": 2},
+                            },
                         ],
                         "axis": [
-                            {"position": "BOTTOM_AXIS", "title": "Card rank (best to worst)"},
+                            {"position": "BOTTOM_AXIS", "title": "Card"},
                             {"position": "LEFT_AXIS", "title": "GIH WR"},
                         ],
                     },
@@ -360,8 +431,20 @@ def _scatter_chart_request(sheet_id: int, title: str, n_rows: int) -> dict:
     }
 
 
-def _column_chart_request(sheet_id: int, title: str, n_rows: int) -> dict:
-    """Single-series COLUMN chart of win rate (col 1) by label (col 0)."""
+def _column_chart_request(
+    sheet_id: int, title: str, n_rows: int, point_colors: list[dict] | None = None
+) -> dict:
+    """Single-series COLUMN chart of win rate (col 1) by label (col 0).
+
+    ``point_colors`` (one rgb dict per row, in table order) colors each bar to
+    match its MTG color.
+    """
+    series = {"series": _src(sheet_id, n_rows, 1), "targetAxis": "LEFT_AXIS"}
+    if point_colors:
+        series["styleOverrides"] = [
+            {"index": i, "colorStyle": {"rgbColor": rgb}}
+            for i, rgb in enumerate(point_colors)
+        ]
     return {
         "addChart": {
             "chart": {
@@ -372,7 +455,7 @@ def _column_chart_request(sheet_id: int, title: str, n_rows: int) -> dict:
                         "legendPosition": "NO_LEGEND",
                         "headerCount": 1,
                         "domains": [{"domain": _src(sheet_id, n_rows, 0)}],
-                        "series": [{"series": _src(sheet_id, n_rows, 1), "targetAxis": "LEFT_AXIS"}],
+                        "series": [series],
                     },
                 },
                 "position": {
@@ -463,6 +546,77 @@ def _format_cards_requests(sheet_id: int, n_rows: int) -> list[dict]:
     return reqs
 
 
+def _freeze_and_bold_header(sheet_id: int) -> list[dict]:
+    return [
+        {
+            "updateSheetProperties": {
+                "properties": {
+                    "sheetId": sheet_id,
+                    "gridProperties": {"frozenRowCount": 1},
+                },
+                "fields": "gridProperties.frozenRowCount",
+            }
+        },
+        {
+            "repeatCell": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1},
+                "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
+                "fields": "userEnteredFormat.textFormat",
+            }
+        },
+    ]
+
+
+def _col_width(sheet_id: int, col: int, px: int) -> dict:
+    return {
+        "updateDimensionProperties": {
+            "range": {"sheetId": sheet_id, "dimension": "COLUMNS",
+                      "startIndex": col, "endIndex": col + 1},
+            "properties": {"pixelSize": px},
+            "fields": "pixelSize",
+        }
+    }
+
+
+def _row_heights(sheet_id: int, start: int, end: int, px: int) -> dict:
+    return {
+        "updateDimensionProperties": {
+            "range": {"sheetId": sheet_id, "dimension": "ROWS",
+                      "startIndex": start, "endIndex": end},
+            "properties": {"pixelSize": px},
+            "fields": "pixelSize",
+        }
+    }
+
+
+def _format_rarity_table_requests(sheet_id: int, n_rows: int) -> list[dict]:
+    """Commons/Uncommons: freeze header, size the preview column and image rows."""
+    return [
+        *_freeze_and_bold_header(sheet_id),
+        _col_width(sheet_id, 0, 80),
+        _row_heights(sheet_id, 1, n_rows + 1, 104),
+    ]
+
+
+def _format_archetype_requests(sheet_id: int, header_rows: list[int]) -> list[dict]:
+    """Archetypes: size both preview columns, bold guild titles, tall image rows."""
+    reqs = [_col_width(sheet_id, 0, 80), _col_width(sheet_id, 4, 80)]
+    for h in header_rows:
+        # Bold the guild title row.
+        reqs.append(
+            {
+                "repeatCell": {
+                    "range": {"sheetId": sheet_id, "startRowIndex": h, "endRowIndex": h + 1},
+                    "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 12}}},
+                    "fields": "userEnteredFormat.textFormat",
+                }
+            }
+        )
+        # The five card rows sit at h+2 .. h+6.
+        reqs.append(_row_heights(sheet_id, h + 2, h + 7, 104))
+    return reqs
+
+
 # --- top-level write ----------------------------------------------------------
 
 
@@ -486,6 +640,15 @@ def write_sheets(
     """
     meta = _sheet_meta(service, ssid)
 
+    # Create any tabs added since this workbook was first made.
+    missing = [t for t in ALL_TABS if t not in meta]
+    if missing:
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=ssid,
+            body={"requests": [{"addSheet": {"properties": {"title": t}}} for t in missing]},
+        ).execute()
+        meta = _sheet_meta(service, ssid)
+
     # Clear prior content + charts so reruns do not stack duplicates.
     clear_reqs: list[dict] = []
     for tab, info in meta.items():
@@ -505,18 +668,29 @@ def write_sheets(
     # Chart tables.
     commons_vals = _rarity_chart_values(df, "common")
     uncommons_vals = _rarity_chart_values(df, "uncommon")
-    color_vals = _color_table_values(colors_df)
-    pairs_vals = _combo_table_values(colors_df)
+    color_tbl = scoring.color_table(colors_df)
+    combo_tbl = scoring.combo_table(colors_df)
+    color_vals = _color_table_values(color_tbl)
+    pairs_vals = _combo_table_values(combo_tbl)
+    arch_vals, arch_headers = _archetype_values(df)
     _write_values(service, ssid, COMMONS_TAB, commons_vals)
     _write_values(service, ssid, UNCOMMONS_TAB, uncommons_vals)
     _write_values(service, ssid, COLOR_TAB, color_vals)
     _write_values(service, ssid, PAIRS_TAB, pairs_vals)
+    _write_values(service, ssid, ARCHETYPES_TAB, arch_vals)
+
+    # Bar colors keyed to MTG color, in table (win-rate) order.
+    color_bar_colors = [scoring.color_rgb(c) for c in color_tbl["color"]]
+    pair_bar_colors = [scoring.color_rgb(p) for p in combo_tbl["pair"]]
 
     # Formatting + charts in one batch.
     reqs: list[dict] = _format_cards_requests(meta[CARDS_TAB]["sheetId"], len(df))
+    reqs += _format_rarity_table_requests(meta[COMMONS_TAB]["sheetId"], len(commons_vals) - 1)
+    reqs += _format_rarity_table_requests(meta[UNCOMMONS_TAB]["sheetId"], len(uncommons_vals) - 1)
+    reqs += _format_archetype_requests(meta[ARCHETYPES_TAB]["sheetId"], arch_headers)
     if len(commons_vals) > 1:
         reqs.append(
-            _scatter_chart_request(
+            _dots_line_chart_request(
                 meta[COMMONS_TAB]["sheetId"],
                 "Commons GIH WR vs common average",
                 len(commons_vals) - 1,
@@ -524,7 +698,7 @@ def write_sheets(
         )
     if len(uncommons_vals) > 1:
         reqs.append(
-            _scatter_chart_request(
+            _dots_line_chart_request(
                 meta[UNCOMMONS_TAB]["sheetId"],
                 "Uncommons GIH WR vs uncommon average",
                 len(uncommons_vals) - 1,
@@ -534,14 +708,14 @@ def write_sheets(
         reqs.append(
             _column_chart_request(
                 meta[COLOR_TAB]["sheetId"], "Best color by win rate (17Lands)",
-                len(color_vals) - 1,
+                len(color_vals) - 1, color_bar_colors,
             )
         )
     if len(pairs_vals) > 1:
         reqs.append(
             _column_chart_request(
                 meta[PAIRS_TAB]["sheetId"], "Best two-color pair by win rate (17Lands)",
-                len(pairs_vals) - 1,
+                len(pairs_vals) - 1, pair_bar_colors,
             )
         )
 

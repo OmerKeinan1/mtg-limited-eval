@@ -50,6 +50,44 @@ GUILD_NAMES = {
     "GU": "Simic",
 }
 
+# The ten guilds in a stable display order, with a canonical 2-letter code.
+GUILD_PAIRS = [
+    ("WU", "Azorius"),
+    ("WB", "Orzhov"),
+    ("WR", "Boros"),
+    ("WG", "Selesnya"),
+    ("UB", "Dimir"),
+    ("UR", "Izzet"),
+    ("UG", "Simic"),
+    ("BR", "Rakdos"),
+    ("BG", "Golgari"),
+    ("RG", "Gruul"),
+]
+
+# Chart-friendly RGB per MTG color (pure white would vanish on a white chart, so
+# white is a warm cream). Used to color the Best Color / Color Pairs bars.
+MTG_RGB = {
+    "W": (0.95, 0.90, 0.66),
+    "U": (0.10, 0.45, 0.75),
+    "B": (0.28, 0.24, 0.28),
+    "R": (0.82, 0.22, 0.18),
+    "G": (0.20, 0.60, 0.32),
+}
+_GOLD_RGB = (0.83, 0.69, 0.22)  # multicolor / colorless fallback
+
+
+def color_rgb(code: str) -> dict:
+    """{red,green,blue} for a color code ('W', 'WU', ...). Pairs blend their colors."""
+    letters = [c for c in str(code) if c in MTG_RGB]
+    if not letters:
+        r, g, b = _GOLD_RGB
+    else:
+        rs = [MTG_RGB[c] for c in letters]
+        r = sum(x[0] for x in rs) / len(rs)
+        g = sum(x[1] for x in rs) / len(rs)
+        b = sum(x[2] for x in rs) / len(rs)
+    return {"red": round(r, 4), "green": round(g, 4), "blue": round(b, 4)}
+
 
 def _numeric(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce")
@@ -125,3 +163,31 @@ def combo_table(colors_df: pd.DataFrame) -> pd.DataFrame:
     two["archetype"] = two.apply(_label, axis=1)
     two = two[["archetype", "pair", "win_rate", "games"]]
     return two.sort_values("win_rate", ascending=False).reset_index(drop=True)
+
+
+def guild_top_cards(
+    cards_df: pd.DataFrame, pair: str, rarity: str, n: int = 5
+) -> pd.DataFrame:
+    """Top ``n`` cards of a rarity that fit a guild's colors, ranked by GIH WR.
+
+    A card "fits" the guild if its color identity is a subset of the guild's two
+    colors (mono-color, on-color gold, and colorless all qualify).
+    """
+    cols = ["name", "gih_wr", "score", "scryfall_uri", "image_url"]
+    if cards_df is None or cards_df.empty:
+        return pd.DataFrame(columns=cols)
+    allowed = set(pair)
+    df = cards_df[cards_df["rarity"].astype(str) == rarity].copy()
+    df["_gih"] = _numeric(df.get("gih_wr"))
+    df = df.dropna(subset=["_gih"])
+
+    def fits(colors) -> bool:
+        chars = {c for c in str(colors or "") if c in MTG_RGB}
+        return chars.issubset(allowed)
+
+    df = df[df["colors"].map(fits)]
+    df = df.sort_values("_gih", ascending=False).head(n)
+    for c in cols:
+        if c not in df.columns:
+            df[c] = pd.NA
+    return df[cols].reset_index(drop=True)

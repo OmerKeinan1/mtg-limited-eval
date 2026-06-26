@@ -86,3 +86,48 @@ def test_combo_table_names_guilds_and_excludes_splash():
 def test_color_tables_empty_input():
     assert scoring.color_table(pd.DataFrame()).empty
     assert scoring.combo_table(pd.DataFrame()).empty
+
+
+def test_color_rgb_pair_blends():
+    w = scoring.color_rgb("W")
+    u = scoring.color_rgb("U")
+    wu = scoring.color_rgb("WU")
+    assert wu["red"] == round((w["red"] + u["red"]) / 2, 4)
+    # Unknown / colorless falls back to gold, not an error.
+    assert set(scoring.color_rgb("").keys()) == {"red", "green", "blue"}
+
+
+def _cards():
+    return pd.DataFrame(
+        [
+            {"name": "W common A", "colors": "W", "rarity": "common", "gih_wr": 0.58,
+             "score": 3.5, "scryfall_uri": "u", "image_url": "i"},
+            {"name": "U common B", "colors": "U", "rarity": "common", "gih_wr": 0.60,
+             "score": 4.0, "scryfall_uri": "u", "image_url": "i"},
+            {"name": "WU gold", "colors": "WU", "rarity": "common", "gih_wr": 0.62,
+             "score": 5.0, "scryfall_uri": "u", "image_url": "i"},
+            {"name": "Colorless", "colors": "", "rarity": "common", "gih_wr": 0.55,
+             "score": 3.0, "scryfall_uri": "u", "image_url": "i"},
+            {"name": "B common", "colors": "B", "rarity": "common", "gih_wr": 0.70,
+             "score": 5.0, "scryfall_uri": "u", "image_url": "i"},
+            {"name": "WU uncommon", "colors": "WU", "rarity": "uncommon", "gih_wr": 0.63,
+             "score": 5.0, "scryfall_uri": "u", "image_url": "i"},
+        ]
+    )
+
+
+def test_guild_top_cards_filters_by_color_identity():
+    out = scoring.guild_top_cards(_cards(), "WU", "common", 5)
+    names = list(out["name"])
+    # WU, W, U and colorless qualify; off-color black does not.
+    assert "B common" not in names
+    assert "WU gold" in names and "Colorless" in names
+    # Ranked by GIH WR desc -> WU gold (0.62) first.
+    assert names[0] == "WU gold"
+
+
+def test_guild_top_cards_respects_rarity_and_limit():
+    out = scoring.guild_top_cards(_cards(), "WU", "uncommon", 5)
+    assert list(out["name"]) == ["WU uncommon"]
+    capped = scoring.guild_top_cards(_cards(), "WU", "common", 2)
+    assert len(capped) == 2
