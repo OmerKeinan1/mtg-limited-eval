@@ -71,3 +71,22 @@ def test_fetch_set_filters_non_booster_and_basics(monkeypatch, tmp_path):
 
     df_basics = scryfall.fetch_set("tst", tmp_path, include_basics=True)
     assert set(df_basics["name"]) == {"Real Card", "Forest"}
+
+
+def test_fetch_set_keeps_cards_when_no_booster_flag(monkeypatch, tmp_path):
+    """Marvel-style sets leave booster=false on every card; we must not drop them."""
+    raw = [
+        {"set": "msh", "collector_number": str(i), "name": f"Hero {i}",
+         "type_line": "Creature", "rarity": "rare", "colors": ["W"],
+         "booster": False, "layout": "normal", "cmc": 3.0}
+        for i in range(5)
+    ]
+    # A token still gets dropped by layout.
+    raw.append({"set": "msh", "collector_number": "99", "name": "Token",
+                "type_line": "Token", "rarity": "common", "colors": [],
+                "booster": False, "layout": "token", "cmc": 0.0})
+    monkeypatch.setattr(scryfall, "fetch_raw_cards", lambda *a, **k: raw)
+
+    df = scryfall.fetch_set("msh", tmp_path)
+    assert len(df) == 5
+    assert "Token" not in set(df["name"])

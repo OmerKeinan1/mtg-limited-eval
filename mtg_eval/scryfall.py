@@ -22,6 +22,17 @@ PAGE_SLEEP_SECONDS = 0.1
 _FACE_FIELDS = ("name", "mana_cost", "oracle_text", "type_line")
 # Layouts whose meaningful text lives in card_faces[].
 _MULTIFACE_LAYOUTS = {"transform", "modal_dfc", "meld", "split", "adventure", "flip"}
+# Non-gameplay layouts to drop defensively (the default search excludes most of
+# these already, but some sets surface them).
+_EXTRA_LAYOUTS = {
+    "token",
+    "double_faced_token",
+    "emblem",
+    "art_series",
+    "vanguard",
+    "scheme",
+    "planar",
+}
 
 
 class ScryfallError(RuntimeError):
@@ -38,7 +49,8 @@ def _fetch_raw(set_code: str) -> list[dict]:
     session.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json"})
 
     cards: list[dict] = []
-    params = {"q": f"set:{set_code}", "order": "name", "unique": "prints"}
+    # unique=cards: one row per gameplay-distinct card, not per art variant.
+    params = {"q": f"set:{set_code}", "order": "name", "unique": "cards"}
     url = SEARCH_URL
     first = True
     while url:
@@ -163,12 +175,23 @@ def fetch_set(
     """
     raw = fetch_raw_cards(set_code, cache_dir, refresh=refresh)
 
+    # Drop basics (unless requested) and non-gameplay extras up front.
+    candidates = [
+        c
+        for c in raw
+        if (include_basics or not _is_basic_land(c))
+        and c.get("layout") not in _EXTRA_LAYOUTS
+    ]
+
+    # The booster flag cleanly separates draftable cards from promos/extras for
+    # most sets, but some sets (e.g. Marvel crossovers) leave it false on every
+    # card. So only apply the booster filter when the set actually uses it.
+    booster_count = sum(1 for c in candidates if c.get("booster"))
+    use_booster_filter = booster_count > 0.5 * len(candidates) if candidates else False
+
     rows: list[dict] = []
-    for card in raw:
-        # Tokens, emblems and most non-draftable extras are booster=false.
-        if not card.get("booster", False):
-            continue
-        if not include_basics and _is_basic_land(card):
+    for card in candidates:
+        if use_booster_filter and not card.get("booster", False):
             continue
         rows.append(_card_to_row(card))
 
