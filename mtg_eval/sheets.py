@@ -256,23 +256,25 @@ def _build_card_values(df: pd.DataFrame) -> list[list]:
 
 
 def _rarity_chart_values(df: pd.DataFrame, rarity: str) -> list[list]:
-    """Table [Card, GIH WR, Set Avg] for one rarity, sorted by GIH WR desc.
+    """Table [Rank, Card, GIH WR, Set Avg] for one rarity, sorted by GIH WR desc.
 
-    The Card cell is a HYPERLINK to Scryfall so you can preview it from the chart
-    table too.
+    Rank (a numeric x) lets the chart plot one dot per card; Set Avg is a constant
+    column so it renders as a flat reference line. The Card cell is a HYPERLINK to
+    Scryfall so you can preview it from the chart table.
     """
     sub = df[df["rarity"].astype(str) == rarity].copy()
     sub["_gih"] = pd.to_numeric(sub["gih_wr"], errors="coerce")
     sub = sub.dropna(subset=["_gih"]).sort_values("_gih", ascending=False)
+    header = ["Rank", "Card", "GIH WR", "Set Avg"]
     if sub.empty:
-        return [["Card", "GIH WR", "Set Avg"]]
+        return [header]
     avg = round(float(sub["_gih"].mean()), 4)
-    rows = [["Card", "GIH WR", "Set Avg"]]
-    for _, r in sub.iterrows():
+    rows = [header]
+    for i, (_, r) in enumerate(sub.iterrows(), start=1):
         name = _cell(r["name"])
         uri = _cell(r.get("scryfall_uri"))
         card = f'=HYPERLINK("{uri}","{name}")' if uri else name
-        rows.append([card, round(float(r["_gih"]), 4), avg])
+        rows.append([i, card, round(float(r["_gih"]), 4), avg])
     return rows
 
 
@@ -315,10 +317,12 @@ def _src(sheet_id: int, n_rows: int, c: int) -> dict:
     }
 
 
-def _line_chart_request(sheet_id: int, title: str, n_rows: int) -> dict:
-    """LINE chart: GIH WR per card (sorted) plus a flat set-average line.
+def _scatter_chart_request(sheet_id: int, title: str, n_rows: int) -> dict:
+    """SCATTER chart: one dot per card (x = rank, y = GIH WR) plus a flat average.
 
-    Cards whose line sits above the average line are the above-average ones.
+    Table layout is [Rank, Card, GIH WR, Set Avg]: domain = Rank (col 0), the
+    card dots = GIH WR (col 2), and the average reference = Set Avg (col 3). Dots
+    above the average band are the above-average cards.
     """
     return {
         "addChart": {
@@ -326,13 +330,17 @@ def _line_chart_request(sheet_id: int, title: str, n_rows: int) -> dict:
                 "spec": {
                     "title": title,
                     "basicChart": {
-                        "chartType": "LINE",
+                        "chartType": "SCATTER",
                         "legendPosition": "BOTTOM_LEGEND",
                         "headerCount": 1,
                         "domains": [{"domain": _src(sheet_id, n_rows, 0)}],
                         "series": [
-                            {"series": _src(sheet_id, n_rows, 1), "targetAxis": "LEFT_AXIS"},
                             {"series": _src(sheet_id, n_rows, 2), "targetAxis": "LEFT_AXIS"},
+                            {"series": _src(sheet_id, n_rows, 3), "targetAxis": "LEFT_AXIS"},
+                        ],
+                        "axis": [
+                            {"position": "BOTTOM_AXIS", "title": "Card rank (best to worst)"},
+                            {"position": "LEFT_AXIS", "title": "GIH WR"},
                         ],
                     },
                 },
@@ -341,7 +349,7 @@ def _line_chart_request(sheet_id: int, title: str, n_rows: int) -> dict:
                         "anchorCell": {
                             "sheetId": sheet_id,
                             "rowIndex": 1,
-                            "columnIndex": 4,
+                            "columnIndex": 5,
                         },
                         "widthPixels": 900,
                         "heightPixels": 420,
@@ -508,7 +516,7 @@ def write_sheets(
     reqs: list[dict] = _format_cards_requests(meta[CARDS_TAB]["sheetId"], len(df))
     if len(commons_vals) > 1:
         reqs.append(
-            _line_chart_request(
+            _scatter_chart_request(
                 meta[COMMONS_TAB]["sheetId"],
                 "Commons GIH WR vs common average",
                 len(commons_vals) - 1,
@@ -516,7 +524,7 @@ def write_sheets(
         )
     if len(uncommons_vals) > 1:
         reqs.append(
-            _line_chart_request(
+            _scatter_chart_request(
                 meta[UNCOMMONS_TAB]["sheetId"],
                 "Uncommons GIH WR vs uncommon average",
                 len(uncommons_vals) - 1,
