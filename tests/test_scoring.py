@@ -1,4 +1,4 @@
-"""Tests for derived scoring (set-relative score + best color)."""
+"""Tests for derived scoring (LSV grade + 17Lands color/combo tables)."""
 
 from __future__ import annotations
 
@@ -11,73 +11,78 @@ def _df(rows):
     return pd.DataFrame(rows)
 
 
-def test_score_is_set_relative_percentile():
+def test_gih_to_lsv_bands():
+    assert scoring.gih_to_lsv(0.70) == 5.0
+    assert scoring.gih_to_lsv(0.62) == 5.0
+    assert scoring.gih_to_lsv(0.58) == 3.5
+    assert scoring.gih_to_lsv(0.545) == 2.5
+    assert scoring.gih_to_lsv(0.50) == 1.0
+    assert scoring.gih_to_lsv(0.40) == 0.0
+
+
+def test_add_score_is_lsv_grade():
     df = _df(
         [
-            {"name": "A", "gih_wr": 0.50, "gih_games": 5000, "colors": "W", "my_eval": ""},
-            {"name": "B", "gih_wr": 0.55, "gih_games": 5000, "colors": "U", "my_eval": ""},
-            {"name": "C", "gih_wr": 0.60, "gih_games": 5000, "colors": "B", "my_eval": ""},
+            {"name": "Bomb", "gih_wr": 0.65, "gih_games": 5000},
+            {"name": "Good", "gih_wr": 0.575, "gih_games": 5000},
+            {"name": "Filler", "gih_wr": 0.53, "gih_games": 5000},
         ]
     )
     out = scoring.add_score(df)
     scores = dict(zip(out["name"], out["score"]))
-    # Highest GIH WR gets the top percentile.
-    assert scores["C"] > scores["B"] > scores["A"]
-    assert float(scores["C"]) == 100.0
+    assert scores["Bomb"] == 5.0
+    assert scores["Good"] == 3.5
+    assert scores["Filler"] == 2.0
 
 
 def test_low_sample_cards_get_blank_score():
     df = _df(
         [
-            {"name": "BigSample", "gih_wr": 0.55, "gih_games": 5000, "colors": "R", "my_eval": ""},
-            {"name": "TinySample", "gih_wr": 0.99, "gih_games": 10, "colors": "R", "my_eval": ""},
-            {"name": "NoData", "gih_wr": None, "gih_games": None, "colors": "R", "my_eval": ""},
+            {"name": "BigSample", "gih_wr": 0.60, "gih_games": 5000},
+            {"name": "TinySample", "gih_wr": 0.99, "gih_games": 10},
+            {"name": "NoData", "gih_wr": None, "gih_games": None},
         ]
     )
     out = scoring.add_score(df)
     scores = dict(zip(out["name"], out["score"]))
     assert pd.isna(scores["TinySample"])
     assert pd.isna(scores["NoData"])
-    assert not pd.isna(scores["BigSample"])
+    assert scores["BigSample"] == 4.0
 
 
-def test_best_color_ranks_by_gih_wr_when_no_manual():
-    df = _df(
+def _colors_df():
+    return pd.DataFrame(
         [
-            {"name": "w1", "gih_wr": 0.60, "colors": "W", "my_eval": ""},
-            {"name": "u1", "gih_wr": 0.50, "colors": "U", "my_eval": ""},
-            {"name": "b1", "gih_wr": 0.45, "colors": "B", "my_eval": ""},
-            {"name": "r1", "gih_wr": 0.48, "colors": "R", "my_eval": ""},
-            {"name": "g1", "gih_wr": 0.52, "colors": "G", "my_eval": ""},
+            {"color_name": "All Decks", "short_name": "All", "wins": 0, "games": 0,
+             "win_rate": None, "is_summary": True},
+            {"color_name": "Mono-White", "short_name": "W", "wins": 60, "games": 100,
+             "win_rate": 0.60, "is_summary": False},
+            {"color_name": "Mono-Blue", "short_name": "U", "wins": 50, "games": 100,
+             "win_rate": 0.50, "is_summary": False},
+            {"color_name": "Azorius (WU)", "short_name": "WU", "wins": 560, "games": 1000,
+             "win_rate": 0.56, "is_summary": False},
+            {"color_name": "Boros (RW)", "short_name": "WR", "wins": 580, "games": 1000,
+             "win_rate": 0.58, "is_summary": False},
+            {"color_name": "Azorius + Splash", "short_name": "WU+", "wins": 5, "games": 10,
+             "win_rate": 0.50, "is_summary": False},
         ]
     )
-    out = scoring.best_color(df)
-    assert out.iloc[0]["color"] == "W"  # highest avg GIH WR
 
 
-def test_best_color_incorporates_manual_rating():
-    # Green is weak on data but Omer rates it highly; manual should pull it up.
-    df = _df(
-        [
-            {"name": "w1", "gih_wr": 0.60, "colors": "W", "my_eval": "2"},
-            {"name": "u1", "gih_wr": 0.55, "colors": "U", "my_eval": "2"},
-            {"name": "b1", "gih_wr": 0.50, "colors": "B", "my_eval": "2"},
-            {"name": "r1", "gih_wr": 0.50, "colors": "R", "my_eval": "2"},
-            {"name": "g1", "gih_wr": 0.45, "colors": "G", "my_eval": "10"},
-        ]
-    )
-    out = scoring.best_color(df)
-    rank = dict(zip(out["color"], out["rank_score"]))
-    # With manual factored in, Green's rank beats its pure-data (last) position.
-    assert rank["G"] > rank["B"]
-    # The manual average is surfaced.
-    g_row = out[out["color"] == "G"].iloc[0]
-    assert float(g_row["avg_my_eval"]) == 10.0
+def test_color_table_ranks_mono_colors():
+    out = scoring.color_table(_colors_df())
+    assert list(out["color"]) == ["W", "U"]  # best first, splash/summary excluded
+    assert out.iloc[0]["win_rate"] == 0.60
 
 
-def test_multicolor_card_counts_toward_each_color():
-    df = _df([{"name": "wu", "gih_wr": 0.58, "colors": "WU", "my_eval": ""}])
-    out = scoring.best_color(df)
-    w = out[out["color"] == "W"].iloc[0]
-    u = out[out["color"] == "U"].iloc[0]
-    assert w["n_cards"] == 1 and u["n_cards"] == 1
+def test_combo_table_names_guilds_and_excludes_splash():
+    out = scoring.combo_table(_colors_df())
+    # Best pair first; splash (WU+) excluded.
+    assert out.iloc[0]["archetype"] == "Boros (RW)"
+    assert "Azorius (WU)" in set(out["archetype"])
+    assert not out["archetype"].str.contains(r"\+").any()
+
+
+def test_color_tables_empty_input():
+    assert scoring.color_table(pd.DataFrame()).empty
+    assert scoring.combo_table(pd.DataFrame()).empty

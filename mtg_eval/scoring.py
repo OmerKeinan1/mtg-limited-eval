@@ -1,40 +1,72 @@
 """Derived scoring.
 
-Two derived views built on top of the merged data:
+* ``score`` -- an LSV-style 0-5 Limited grade derived from GIH WR, the
+  gold-standard 17Lands power signal. LSV (Luis Scott-Vargas) grades Limited
+  cards 0.0-5.0 in half-point steps: 5.0 is a format-defining bomb, good rares
+  sit at 4.0+, good commons around 3.0-3.5, filler near 2.0, and unplayables
+  near 0. We translate GIH WR into that scale with fixed win-rate bands
+  (calibrated to typical Premier Draft baselines). Cards with too few games are
+  left ungraded.
 
-1. ``score`` -- a set-relative card score. GIH WR is the gold-standard 17Lands
-   power signal but is only fair when compared within a set (it is inflated by
-   strong colors and by being expensive). So the score is the percentile rank of
-   a card's GIH WR among the cards in the same set that have a trustworthy sample.
-
-2. ``best_color`` -- a per-color ranking that blends the data (average GIH WR of
-   the color's cards) with Omer's manual ratings (average my_eval), so the
-   "which color is best" call reflects both the metrics and his own read.
+* ``color_table`` / ``combo_table`` -- best color and best two-color archetype,
+  taken straight from 17Lands' aggregate color-ratings data (objective win
+  rates), not inferred from card averages.
 """
 
 from __future__ import annotations
 
 import pandas as pd
 
-# A GIH WR number needs enough games behind it to be meaningful. Commons /
-# uncommons clear this easily; thin-sample rares/mythics get flagged instead.
+# A GIH WR number needs enough games to be meaningful.
 MIN_GIH_GAMES = 200
 
-# Single colors in WUBRG order. Multicolor cards count toward each of their
-# colors; colorless is tracked separately.
-COLORS = ["W", "U", "B", "R", "G"]
-COLOR_NAMES = {"W": "White", "U": "Blue", "B": "Black", "R": "Red", "G": "Green"}
+# GIH WR -> LSV 0-5 grade. Each (threshold, grade): the first band whose
+# threshold a card's GIH WR meets or exceeds wins. Tunable.
+LSV_BANDS = [
+    (0.620, 5.0),
+    (0.605, 4.5),
+    (0.590, 4.0),
+    (0.575, 3.5),
+    (0.560, 3.0),
+    (0.545, 2.5),
+    (0.530, 2.0),
+    (0.515, 1.5),
+    (0.500, 1.0),
+    (0.480, 0.5),
+]
+LSV_FLOOR = 0.0
+
+# Guild names for the ten two-color pairs (keyed by sorted color letters).
+GUILD_NAMES = {
+    "WU": "Azorius",
+    "UB": "Dimir",
+    "BR": "Rakdos",
+    "RG": "Gruul",
+    "GW": "Selesnya",
+    "WB": "Orzhov",
+    "UR": "Izzet",
+    "BG": "Golgari",
+    "RW": "Boros",
+    "GU": "Simic",
+}
 
 
 def _numeric(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce")
 
 
-def add_score(df: pd.DataFrame) -> pd.DataFrame:
-    """Add a set-relative ``score`` column (0-100 percentile of GIH WR).
+def gih_to_lsv(gih_wr: float) -> float:
+    for threshold, grade in LSV_BANDS:
+        if gih_wr >= threshold:
+            return grade
+    return LSV_FLOOR
 
-    Cards without GIH WR data, or with fewer than ``MIN_GIH_GAMES`` games, get a
-    blank score (they are not dropped, just not ranked).
+
+def add_score(df: pd.DataFrame) -> pd.DataFrame:
+    """Add an LSV 0-5 ``score`` column derived from GIH WR.
+
+    Cards without GIH WR data, or with fewer than ``MIN_GIH_GAMES`` games, are
+    left blank (not graded) rather than dropped.
     """
     out = df.copy()
     gih = _numeric(out.get("gih_wr"))
@@ -43,58 +75,53 @@ def add_score(df: pd.DataFrame) -> pd.DataFrame:
     eligible = gih.notna() & (games.fillna(0) >= MIN_GIH_GAMES)
     score = pd.Series([pd.NA] * len(out), index=out.index, dtype="object")
     if eligible.any():
-        # Percentile rank within the eligible population, 0-100.
-        pct = gih[eligible].rank(pct=True) * 100.0
-        score.loc[eligible] = pct.round(1)
+        score.loc[eligible] = gih[eligible].map(gih_to_lsv)
     out["score"] = score
     return out
 
 
-def _zscore(series: pd.Series) -> pd.Series:
-    vals = _numeric(series)
-    std = vals.std(ddof=0)
-    if not std or pd.isna(std):
-        return pd.Series([0.0] * len(series), index=series.index)
-    return (vals - vals.mean()) / std
+# --- 17Lands color / archetype tables -----------------------------------------
 
 
-def best_color(df: pd.DataFrame) -> pd.DataFrame:
-    """Rank the five colors by a blend of average GIH WR and average my_eval.
+def color_table(colors_df: pd.DataFrame) -> pd.DataFrame:
+    """Mono-color win rates (W/U/B/R/G), best first. From 17Lands color ratings."""
+    cols = ["color", "win_rate", "games"]
+    if colors_df is None or colors_df.empty:
+        return pd.DataFrame(columns=cols)
+    df = colors_df.copy()
+    df["short_name"] = df["short_name"].astype(str)
+    mono = df[(df["is_summary"].astype(str).isin(["False", "false", "0"]))
+              & (df["short_name"].isin(["W", "U", "B", "R", "G"]))].copy()
+    if mono.empty:
+        return pd.DataFrame(columns=cols)
+    mono = mono.rename(columns={"short_name": "color"})
+    mono = mono[["color", "win_rate", "games"]]
+    return mono.sort_values("win_rate", ascending=False).reset_index(drop=True)
 
-    A card counts toward every color in its color identity (so multicolor cards
-    feed both colors). Returns one row per color, best first.
-    """
-    gih = _numeric(df.get("gih_wr"))
-    my_eval = _numeric(df.get("my_eval"))
-    colors = df.get("colors", pd.Series([""] * len(df))).fillna("").astype(str)
 
-    rows = []
-    for c in COLORS:
-        mask = colors.str.contains(c, regex=False)
-        col_gih = gih[mask].dropna()
-        col_eval = my_eval[mask].dropna()
-        rows.append(
-            {
-                "color": c,
-                "color_name": COLOR_NAMES[c],
-                "n_cards": int(mask.sum()),
-                "avg_gih_wr": round(col_gih.mean(), 4) if len(col_gih) else pd.NA,
-                "n_rated": int(len(col_eval)),
-                "avg_my_eval": round(col_eval.mean(), 2) if len(col_eval) else pd.NA,
-            }
-        )
+def combo_table(colors_df: pd.DataFrame) -> pd.DataFrame:
+    """Two-color guild win rates (Azorius, Rakdos, ...), best first."""
+    cols = ["archetype", "pair", "win_rate", "games"]
+    if colors_df is None or colors_df.empty:
+        return pd.DataFrame(columns=cols)
+    df = colors_df.copy()
+    df["short_name"] = df["short_name"].astype(str)
+    # Exact two-letter color codes, no splash ('+'), not summary rows.
+    two = df[
+        (df["is_summary"].astype(str).isin(["False", "false", "0"]))
+        & (df["short_name"].str.fullmatch(r"[WUBRG]{2}"))
+    ].copy()
+    if two.empty:
+        return pd.DataFrame(columns=cols)
+    two["pair"] = two["short_name"]
+    # 17Lands already labels pairs nicely ("Boros (RW)"); use that, else build one.
+    def _label(r):
+        cn = str(r.get("color_name") or "").strip()
+        if cn:
+            return cn
+        guild = GUILD_NAMES.get("".join(sorted(r["pair"])), "")
+        return f"{guild} ({r['pair']})" if guild else r["pair"]
 
-    table = pd.DataFrame(rows)
-
-    # Blend: z-score the data signal and (if any manual ratings exist) the manual
-    # signal across the five colors, then average whichever signals are present.
-    z_data = _zscore(table["avg_gih_wr"])
-    if table["avg_my_eval"].notna().any():
-        z_manual = _zscore(table["avg_my_eval"])
-        # Average the two z-scores per color, ignoring a missing manual signal.
-        stacked = pd.concat([z_data, z_manual], axis=1)
-        table["rank_score"] = stacked.mean(axis=1).round(3)
-    else:
-        table["rank_score"] = z_data.round(3)
-
-    return table.sort_values("rank_score", ascending=False).reset_index(drop=True)
+    two["archetype"] = two.apply(_label, axis=1)
+    two = two[["archetype", "pair", "win_rate", "games"]]
+    return two.sort_values("win_rate", ascending=False).reset_index(drop=True)

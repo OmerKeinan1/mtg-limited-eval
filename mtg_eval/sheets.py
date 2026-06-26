@@ -36,7 +36,8 @@ CARDS_TAB = "Cards"
 COMMONS_TAB = "Commons"
 UNCOMMONS_TAB = "Uncommons"
 COLOR_TAB = "Best Color"
-ALL_TABS = [CARDS_TAB, COMMONS_TAB, UNCOMMONS_TAB, COLOR_TAB]
+PAIRS_TAB = "Color Pairs"
+ALL_TABS = [CARDS_TAB, COMMONS_TAB, UNCOMMONS_TAB, COLOR_TAB, PAIRS_TAB]
 
 # Cards tab columns, in display order. (set / collector_number kept at the end so
 # the sheet is self-sufficient for the preserve-my-eval merge key.)
@@ -254,69 +255,84 @@ def _build_card_values(df: pd.DataFrame) -> list[list]:
     return rows
 
 
-def _rarity_chart_values(df: pd.DataFrame, rarity: str) -> tuple[list[list], float | None]:
-    """Table [Card, GIH WR, Set Avg] for one rarity, sorted by GIH WR desc."""
+def _rarity_chart_values(df: pd.DataFrame, rarity: str) -> list[list]:
+    """Table [Card, GIH WR, Set Avg] for one rarity, sorted by GIH WR desc.
+
+    The Card cell is a HYPERLINK to Scryfall so you can preview it from the chart
+    table too.
+    """
     sub = df[df["rarity"].astype(str) == rarity].copy()
     sub["_gih"] = pd.to_numeric(sub["gih_wr"], errors="coerce")
     sub = sub.dropna(subset=["_gih"]).sort_values("_gih", ascending=False)
     if sub.empty:
-        return [["Card", "GIH WR", "Set Avg"]], None
+        return [["Card", "GIH WR", "Set Avg"]]
     avg = round(float(sub["_gih"].mean()), 4)
     rows = [["Card", "GIH WR", "Set Avg"]]
     for _, r in sub.iterrows():
-        rows.append([_cell(r["name"]), round(float(r["_gih"]), 4), avg])
-    return rows, avg
+        name = _cell(r["name"])
+        uri = _cell(r.get("scryfall_uri"))
+        card = f'=HYPERLINK("{uri}","{name}")' if uri else name
+        rows.append([card, round(float(r["_gih"]), 4), avg])
+    return rows
 
 
-def _color_chart_values(df: pd.DataFrame) -> list[list]:
-    table = scoring.best_color(df)
-    rows = [["Color", "Avg GIH WR", "Avg my_eval", "Rank score"]]
+def _color_table_values(colors_df: pd.DataFrame) -> list[list]:
+    table = scoring.color_table(colors_df)
+    rows = [["Color", "Win Rate", "Games"]]
     for _, r in table.iterrows():
-        rows.append(
-            [
-                _cell(r["color_name"]),
-                _cell(r["avg_gih_wr"]),
-                _cell(r["avg_my_eval"]),
-                _cell(r["rank_score"]),
-            ]
-        )
+        wr = r["win_rate"]
+        rows.append([_cell(r["color"]), round(float(wr), 4) if pd.notna(wr) else "",
+                     _cell(r["games"])])
+    return rows
+
+
+def _combo_table_values(colors_df: pd.DataFrame) -> list[list]:
+    table = scoring.combo_table(colors_df)
+    rows = [["Archetype", "Win Rate", "Games"]]
+    for _, r in table.iterrows():
+        wr = r["win_rate"]
+        rows.append([_cell(r["archetype"]), round(float(wr), 4) if pd.notna(wr) else "",
+                     _cell(r["games"])])
     return rows
 
 
 # --- chart + format requests --------------------------------------------------
 
 
-def _combo_chart_request(sheet_id: int, title: str, n_rows: int) -> dict:
-    """COMBO chart: GIH WR per card as columns + set-average as a line."""
-
-    def col(c):
-        return {
-            "sourceRange": {
-                "sources": [
-                    {
-                        "sheetId": sheet_id,
-                        "startRowIndex": 0,
-                        "endRowIndex": n_rows + 1,
-                        "startColumnIndex": c,
-                        "endColumnIndex": c + 1,
-                    }
-                ]
-            }
+def _src(sheet_id: int, n_rows: int, c: int) -> dict:
+    return {
+        "sourceRange": {
+            "sources": [
+                {
+                    "sheetId": sheet_id,
+                    "startRowIndex": 0,
+                    "endRowIndex": n_rows + 1,
+                    "startColumnIndex": c,
+                    "endColumnIndex": c + 1,
+                }
+            ]
         }
+    }
 
+
+def _line_chart_request(sheet_id: int, title: str, n_rows: int) -> dict:
+    """LINE chart: GIH WR per card (sorted) plus a flat set-average line.
+
+    Cards whose line sits above the average line are the above-average ones.
+    """
     return {
         "addChart": {
             "chart": {
                 "spec": {
                     "title": title,
                     "basicChart": {
-                        "chartType": "COMBO",
+                        "chartType": "LINE",
                         "legendPosition": "BOTTOM_LEGEND",
                         "headerCount": 1,
-                        "domains": [{"domain": col(0)}],
+                        "domains": [{"domain": _src(sheet_id, n_rows, 0)}],
                         "series": [
-                            {"series": col(1), "type": "COLUMN", "targetAxis": "LEFT_AXIS"},
-                            {"series": col(2), "type": "LINE", "targetAxis": "LEFT_AXIS"},
+                            {"series": _src(sheet_id, n_rows, 1), "targetAxis": "LEFT_AXIS"},
+                            {"series": _src(sheet_id, n_rows, 2), "targetAxis": "LEFT_AXIS"},
                         ],
                     },
                 },
@@ -336,33 +352,19 @@ def _combo_chart_request(sheet_id: int, title: str, n_rows: int) -> dict:
     }
 
 
-def _color_chart_request(sheet_id: int, n_rows: int) -> dict:
-    def col(c):
-        return {
-            "sourceRange": {
-                "sources": [
-                    {
-                        "sheetId": sheet_id,
-                        "startRowIndex": 0,
-                        "endRowIndex": n_rows + 1,
-                        "startColumnIndex": c,
-                        "endColumnIndex": c + 1,
-                    }
-                ]
-            }
-        }
-
+def _column_chart_request(sheet_id: int, title: str, n_rows: int) -> dict:
+    """Single-series COLUMN chart of win rate (col 1) by label (col 0)."""
     return {
         "addChart": {
             "chart": {
                 "spec": {
-                    "title": "Best color (blended GIH WR + manual rating)",
+                    "title": title,
                     "basicChart": {
                         "chartType": "COLUMN",
-                        "legendPosition": "BOTTOM_LEGEND",
+                        "legendPosition": "NO_LEGEND",
                         "headerCount": 1,
-                        "domains": [{"domain": col(0)}],
-                        "series": [{"series": col(3), "targetAxis": "LEFT_AXIS"}],
+                        "domains": [{"domain": _src(sheet_id, n_rows, 0)}],
+                        "series": [{"series": _src(sheet_id, n_rows, 1), "targetAxis": "LEFT_AXIS"}],
                     },
                 },
                 "position": {
@@ -370,7 +372,7 @@ def _color_chart_request(sheet_id: int, n_rows: int) -> dict:
                         "anchorCell": {
                             "sheetId": sheet_id,
                             "rowIndex": 1,
-                            "columnIndex": 5,
+                            "columnIndex": 4,
                         },
                         "widthPixels": 640,
                         "heightPixels": 380,
@@ -465,8 +467,15 @@ def _write_values(service, ssid: str, tab: str, values: list[list]) -> None:
     ).execute()
 
 
-def write_sheets(service, ssid: str, df: pd.DataFrame, set_code: str) -> None:
-    """Populate all tabs and (re)build the charts for one set."""
+def write_sheets(
+    service, ssid: str, df: pd.DataFrame, set_code: str, colors_df: pd.DataFrame | None = None
+) -> None:
+    """Populate all tabs and (re)build the charts for one set.
+
+    ``colors_df`` is 17Lands color-ratings data (see seventeen_lands.fetch_colors);
+    it drives the Best Color and Color Pairs tabs. If None/empty those tabs are
+    left empty.
+    """
     meta = _sheet_meta(service, ssid)
 
     # Clear prior content + charts so reruns do not stack duplicates.
@@ -483,38 +492,49 @@ def write_sheets(service, ssid: str, df: pd.DataFrame, set_code: str) -> None:
         ).execute()
 
     # Cards tab.
-    card_values = _build_card_values(df)
-    _write_values(service, ssid, CARDS_TAB, card_values)
+    _write_values(service, ssid, CARDS_TAB, _build_card_values(df))
 
     # Chart tables.
-    commons_vals, _ = _rarity_chart_values(df, "common")
-    uncommons_vals, _ = _rarity_chart_values(df, "uncommon")
-    color_vals = _color_chart_values(df)
+    commons_vals = _rarity_chart_values(df, "common")
+    uncommons_vals = _rarity_chart_values(df, "uncommon")
+    color_vals = _color_table_values(colors_df)
+    pairs_vals = _combo_table_values(colors_df)
     _write_values(service, ssid, COMMONS_TAB, commons_vals)
     _write_values(service, ssid, UNCOMMONS_TAB, uncommons_vals)
     _write_values(service, ssid, COLOR_TAB, color_vals)
+    _write_values(service, ssid, PAIRS_TAB, pairs_vals)
 
     # Formatting + charts in one batch.
     reqs: list[dict] = _format_cards_requests(meta[CARDS_TAB]["sheetId"], len(df))
     if len(commons_vals) > 1:
         reqs.append(
-            _combo_chart_request(
+            _line_chart_request(
                 meta[COMMONS_TAB]["sheetId"],
-                "Commons by GIH WR (line = common average)",
+                "Commons GIH WR vs common average",
                 len(commons_vals) - 1,
             )
         )
     if len(uncommons_vals) > 1:
         reqs.append(
-            _combo_chart_request(
+            _line_chart_request(
                 meta[UNCOMMONS_TAB]["sheetId"],
-                "Uncommons by GIH WR (line = uncommon average)",
+                "Uncommons GIH WR vs uncommon average",
                 len(uncommons_vals) - 1,
             )
         )
     if len(color_vals) > 1:
         reqs.append(
-            _color_chart_request(meta[COLOR_TAB]["sheetId"], len(color_vals) - 1)
+            _column_chart_request(
+                meta[COLOR_TAB]["sheetId"], "Best color by win rate (17Lands)",
+                len(color_vals) - 1,
+            )
+        )
+    if len(pairs_vals) > 1:
+        reqs.append(
+            _column_chart_request(
+                meta[PAIRS_TAB]["sheetId"], "Best two-color pair by win rate (17Lands)",
+                len(pairs_vals) - 1,
+            )
         )
 
     service.spreadsheets().batchUpdate(

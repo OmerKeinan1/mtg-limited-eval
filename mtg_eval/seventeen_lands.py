@@ -15,6 +15,7 @@ import pandas as pd
 import requests
 
 DATA_URL = "https://www.17lands.com/card_ratings/data"
+COLOR_DATA_URL = "https://www.17lands.com/color_ratings/data"
 USER_AGENT = "mtg-limited-eval/0.1 (https://github.com/OmerKeinan1/mtg-limited-eval)"
 # Wide enough to cover every set's full Limited run.
 DEFAULT_START_DATE = "2019-01-01"
@@ -131,3 +132,74 @@ def _normalize_frame(df: pd.DataFrame) -> pd.DataFrame:
 def empty_frame() -> pd.DataFrame:
     """Schema-preserving empty 17Lands frame for the no-data path."""
     return pd.DataFrame(columns=["join_name", *STAT_COLUMNS])
+
+
+# --- color / archetype ratings ------------------------------------------------
+
+COLOR_COLUMNS = ["color_name", "short_name", "wins", "games", "win_rate", "is_summary"]
+
+
+def _colors_cache_path(cache_dir: Path, set_code: str, fmt: str) -> Path:
+    return cache_dir / f"17lands-colors-{set_code.lower()}-{fmt.lower()}.csv"
+
+
+def _normalize_colors(records: list[dict]) -> pd.DataFrame:
+    if not records:
+        return pd.DataFrame(columns=COLOR_COLUMNS)
+    df = pd.DataFrame(records)
+    out = pd.DataFrame()
+    out["color_name"] = df.get("color_name", "")
+    out["short_name"] = df.get("short_name", "").astype(str)
+    out["wins"] = pd.to_numeric(df.get("wins"), errors="coerce")
+    out["games"] = pd.to_numeric(df.get("games"), errors="coerce")
+    out["win_rate"] = (out["wins"] / out["games"]).where(out["games"] > 0)
+    out["is_summary"] = df.get("is_summary", False)
+    return out[COLOR_COLUMNS]
+
+
+def fetch_colors(
+    set_code: str,
+    cache_dir: Path,
+    *,
+    fmt: str = "PremierDraft",
+    refresh: bool = False,
+    end_date: str | None = None,
+) -> pd.DataFrame:
+    """Fetch 17Lands color/archetype win rates (mono colors and guild pairs).
+
+    Returns a frame with win_rate per color_name; empty if the set has no data.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path = _colors_cache_path(cache_dir, set_code, fmt)
+
+    if path.exists() and not refresh:
+        return _normalize_colors(pd.read_csv(path).to_dict("records"))
+
+    if end_date is None:
+        end_date = dt.date.today().isoformat()
+    session = requests.Session()
+    session.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json"})
+    params = {
+        "expansion": set_code.upper(),
+        "event_type": fmt,
+        "start_date": DEFAULT_START_DATE,
+        "end_date": end_date,
+        "combine_splash": "false",
+    }
+    resp = session.get(COLOR_DATA_URL, params=params, timeout=30)
+    if resp.status_code == 429:
+        raise SeventeenLandsError(
+            "17Lands returned 429 on color ratings (rate limited). Stopping."
+        )
+    if resp.status_code != 200:
+        raise SeventeenLandsError(
+            f"17Lands color ratings failed ({resp.status_code}) for '{set_code}'."
+        )
+    out = _normalize_colors(resp.json())
+    out.to_csv(path, index=False)
+    return out
+
+
+def empty_colors() -> pd.DataFrame:
+    """Schema-preserving empty color frame."""
+    return pd.DataFrame(columns=COLOR_COLUMNS)

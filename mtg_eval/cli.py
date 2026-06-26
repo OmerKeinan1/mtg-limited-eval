@@ -112,6 +112,15 @@ def main(
         click.echo(f"17Lands error: {exc}", err=True)
         click.echo("Continuing with blank 17Lands columns.", err=True)
 
+    # 17Lands color / archetype ratings (best-effort; only used for the sheet).
+    sl_colors = seventeen_lands.empty_colors()
+    try:
+        sl_colors = seventeen_lands.fetch_colors(
+            set_code, CACHE_DIR, fmt=sl_format, refresh=refresh
+        )
+    except seventeen_lands.SeventeenLandsError as exc:
+        click.echo(f"17Lands color ratings unavailable: {exc}", err=True)
+
     # --- Establish the source of truth for prior my_eval ---
     # Prefer the live Google Sheet (where Omer edits), fall back to the CSV.
     service = None
@@ -154,7 +163,7 @@ def main(
         try:
             from . import sheets
 
-            sheets.write_sheets(service, ssid, combined, set_code)
+            sheets.write_sheets(service, ssid, combined, set_code, sl_colors)
             click.echo(f"Synced Google Sheet: {sheet_url}")
         except Exception as exc:  # noqa: BLE001
             sheets_failed = True
