@@ -5,6 +5,9 @@ description = "Per-set Magic: The Gathering Limited card evaluation tool (Scryfa
 requires-python = ">=3.13"
 dependencies = [
     "click>=8.4.2",
+    "google-api-python-client>=2.198.0",
+    "google-auth>=2.55.1",
+    "google-auth-oauthlib>=1.4.0",
     "pandas>=3.0.3",
     "python-dotenv>=1.2.2",
     "requests>=2.34.2",
