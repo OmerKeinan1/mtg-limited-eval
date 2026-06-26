@@ -1,9 +1,10 @@
-"""Merge Scryfall + 17Lands data and persist Omer's manual eval.
+"""Merge Scryfall + 17Lands data, derive scores, and persist Omer's manual eval.
 
 The killer invariant: rerunning the tool must never clobber ``my_eval`` /
-``my_notes``. Those are preserved by merging the existing output CSV back in on
-``(set, collector_number)`` -- a key that is stable across reprints, name
-changes, and split-card weirdness.
+``my_notes``. Those are preserved by merging the prior evaluation back in on
+``(set, collector_number)`` -- a key stable across reprints, name changes, and
+split-card weirdness. The prior evaluation can come from the existing CSV or
+from the live Google Sheet (whichever the caller passes).
 """
 
 from __future__ import annotations
@@ -12,9 +13,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import seventeen_lands
+from . import scoring, seventeen_lands
 
-# Final column order, left to right.
+# Full data model, left to right (CSV order). The Sheet writer reorders/selects.
 OUTPUT_COLUMNS = [
     "set",
     "collector_number",
@@ -24,23 +25,25 @@ OUTPUT_COLUMNS = [
     "type_line",
     "rarity",
     "colors",
+    "score",
     "gih_wr",
-    "oh_wr",
     "iwd",
+    "oh_wr",
+    "gd_wr",
     "ata",
     "alsa",
+    "gih_games",
     "my_eval",
     "my_notes",
     "oracle_text",
     "scryfall_uri",
+    "image_url",
 ]
 
 EVAL_COLUMNS = ["my_eval", "my_notes"]
 MERGE_KEY = ["set", "collector_number"]
 
 # Sort orders.
-_RARITY_RANK = {"mythic": 0, "rare": 1, "uncommon": 2, "common": 3}
-# Single-color WUBRG, then multicolor, then colorless.
 _COLOR_RANK = {"W": 0, "U": 1, "B": 2, "R": 3, "G": 4}
 
 
@@ -81,45 +84,60 @@ def _attach_17lands(scryfall_df: pd.DataFrame, sl_df: pd.DataFrame) -> pd.DataFr
     return base
 
 
+def load_existing_eval(source) -> pd.DataFrame | None:
+    """Return a [set, collector_number, my_eval, my_notes] frame from a prior run.
+
+    ``source`` may be a Path to a CSV, an already-loaded DataFrame (e.g. read
+    back from the Google Sheet), or None. Raises MergeError if a source exists
+    but lacks the merge-key columns, so we never silently drop hand-entered data.
+    """
+    if source is None:
+        return None
+
+    if isinstance(source, pd.DataFrame):
+        existing = source.copy()
+        label = "the live sheet"
+    else:
+        path = Path(source)
+        if not path.exists():
+            return None
+        try:
+            existing = pd.read_csv(path, dtype=str)
+        except Exception as exc:  # noqa: BLE001 - surface as a hard stop
+            raise MergeError(f"Could not read existing eval file {path}: {exc}") from exc
+        label = str(path)
+
+    missing = [c for c in MERGE_KEY if c not in existing.columns]
+    if missing:
+        raise MergeError(
+            f"Existing eval source ({label}) is missing key columns {missing}; "
+            "refusing to overwrite and lose my_eval."
+        )
+    for col in EVAL_COLUMNS:
+        if col not in existing.columns:
+            existing[col] = ""
+    out = existing[MERGE_KEY + EVAL_COLUMNS].copy()
+    for col in MERGE_KEY:
+        out[col] = out[col].astype(str)
+    return out
+
+
 def merge(
     scryfall_df: pd.DataFrame,
     seventeen_lands_df: pd.DataFrame,
-    existing_eval_csv_path: Path,
+    existing_eval_source=None,
 ) -> pd.DataFrame:
-    """Combine sources and preserve my_eval / my_notes.
+    """Combine sources, derive score, and preserve my_eval / my_notes.
 
-    Eval preservation key: (set, collector_number).
-    Raises MergeError if an existing eval file exists but cannot be read or is
-    missing the key columns -- we refuse to silently drop hand-entered data.
+    Eval preservation key: (set, collector_number). ``existing_eval_source`` is a
+    CSV Path, a DataFrame (from the Sheet), or None.
     """
     base = _attach_17lands(scryfall_df, seventeen_lands_df)
 
-    if existing_eval_csv_path is not None and Path(existing_eval_csv_path).exists():
-        try:
-            existing = pd.read_csv(existing_eval_csv_path, dtype=str)
-        except Exception as exc:  # noqa: BLE001 - surface as a hard stop
-            raise MergeError(
-                f"Could not read existing eval file {existing_eval_csv_path}: {exc}"
-            ) from exc
-
-        missing = [c for c in MERGE_KEY if c not in existing.columns]
-        if missing:
-            raise MergeError(
-                f"Existing eval file {existing_eval_csv_path} is missing key "
-                f"columns {missing}; refusing to overwrite and lose my_eval."
-            )
-
-        for col in EVAL_COLUMNS:
-            if col not in existing.columns:
-                existing[col] = ""
-
-        eval_cols = existing[MERGE_KEY + EVAL_COLUMNS].copy()
-        # Normalize key dtypes to string on both sides so the join lines up.
+    eval_cols = load_existing_eval(existing_eval_source)
+    if eval_cols is not None:
         for col in MERGE_KEY:
             base[col] = base[col].astype(str)
-            eval_cols[col] = eval_cols[col].astype(str)
-
-        # Drop fully-empty eval rows so they do not introduce noise.
         base = base.merge(eval_cols, on=MERGE_KEY, how="left")
     else:
         for col in EVAL_COLUMNS:
@@ -132,7 +150,8 @@ def merge(
 
 
 def _finalize(df: pd.DataFrame) -> pd.DataFrame:
-    """Add any missing columns, order, and sort."""
+    """Derive score, add any missing columns, order, and sort."""
+    df = scoring.add_score(df)
     for col in OUTPUT_COLUMNS:
         if col not in df.columns:
             df[col] = "" if col in EVAL_COLUMNS else pd.NA
@@ -150,17 +169,19 @@ def _color_sort_key(colors: str) -> int:
 
 
 def sort_cards(df: pd.DataFrame) -> pd.DataFrame:
-    """Sort by rarity (M>R>U>C), color identity (WUBRG, multi, colorless), cmc, name."""
+    """Sort by color identity (WUBRG, multi, colorless), then score desc, then name."""
     if df.empty:
         return df
     work = df.copy()
-    work["_rarity"] = work["rarity"].map(lambda r: _RARITY_RANK.get(str(r), 9))
     work["_color"] = work["colors"].map(_color_sort_key)
-    work["_cmc"] = pd.to_numeric(work["cmc"], errors="coerce").fillna(0.0)
+    # Higher score is better; rank descending with blanks last.
+    work["_score"] = pd.to_numeric(work["score"], errors="coerce").fillna(-1.0)
     work["_name"] = work["name"].astype(str).str.lower()
     work = work.sort_values(
-        ["_rarity", "_color", "_cmc", "_name"], kind="stable"
-    ).drop(columns=["_rarity", "_color", "_cmc", "_name"])
+        ["_color", "_score", "_name"],
+        ascending=[True, False, True],
+        kind="stable",
+    ).drop(columns=["_color", "_score", "_name"])
     return work.reset_index(drop=True)
 
 

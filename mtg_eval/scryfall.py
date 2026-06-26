@@ -126,9 +126,22 @@ def _card_to_row(card: dict) -> dict:
         "colors": "".join(colors) if colors else "",
         "oracle_text": (oracle_text or "").replace("\n", " "),
         "scryfall_uri": card.get("scryfall_uri", ""),
+        "image_url": _image_url(card),
         "layout": card.get("layout", ""),
         "booster": bool(card.get("booster", False)),
     }
+
+
+def _image_url(card: dict) -> str:
+    """Small front-face image URL for inline previews."""
+    imgs = card.get("image_uris")
+    if not imgs:
+        faces = card.get("card_faces") or []
+        if faces:
+            imgs = faces[0].get("image_uris")
+    if not imgs:
+        return ""
+    return imgs.get("small") or imgs.get("normal") or ""
 
 
 def _is_basic_land(card: dict) -> bool:
@@ -174,6 +187,7 @@ def fetch_set(
                 "colors",
                 "oracle_text",
                 "scryfall_uri",
+                "image_url",
                 "layout",
                 "booster",
             ]

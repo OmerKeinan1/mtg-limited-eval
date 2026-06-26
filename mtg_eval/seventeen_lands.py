@@ -23,9 +23,12 @@ DEFAULT_START_DATE = "2019-01-01"
 STAT_FIELDS = {
     "ever_drawn_win_rate": "gih_wr",
     "opening_hand_win_rate": "oh_wr",
+    "drawn_win_rate": "gd_wr",
     "drawn_improvement_win_rate": "iwd",
     "avg_pick": "ata",
     "avg_seen": "alsa",
+    # Sample size behind GIH WR; used to flag low-confidence cards.
+    "ever_drawn_game_count": "gih_games",
 }
 STAT_COLUMNS = list(STAT_FIELDS.values())
 

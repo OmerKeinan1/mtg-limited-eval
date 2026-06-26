@@ -161,13 +161,31 @@ def test_output_column_order(tmp_path):
     assert list(combined.columns) == merge_mod.OUTPUT_COLUMNS
 
 
-def test_sort_order_rarity_then_color(tmp_path):
+def test_sort_order_is_color_first(tmp_path):
+    # Color dominates rarity: a common White sorts before a mythic Red.
     df = pd.DataFrame(
         [
-            _scryfall_row("Common Red", 1, rarity="common", colors="R", cmc=2),
-            _scryfall_row("Mythic White", 2, rarity="mythic", colors="W", cmc=5),
-            _scryfall_row("Rare Blue", 3, rarity="rare", colors="U", cmc=1),
+            _scryfall_row("Mythic Red", 1, rarity="mythic", colors="R", cmc=5),
+            _scryfall_row("Common White", 2, rarity="common", colors="W", cmc=2),
+            _scryfall_row("Rare Green", 3, rarity="rare", colors="G", cmc=1),
         ]
     )
     out = merge_mod.merge(df, _empty_17lands(), tmp_path / "none.csv")
-    assert list(out["name"]) == ["Mythic White", "Rare Blue", "Common Red"]
+    # WUBRG order: White, then Red, then Green.
+    assert list(out["name"]) == ["Common White", "Mythic Red", "Rare Green"]
+
+
+def test_sort_within_color_by_score_desc(tmp_path):
+    df = pd.DataFrame(
+        [_scryfall_row("Low Blue", 1, colors="U"), _scryfall_row("High Blue", 2, colors="U")]
+    )
+    sl = pd.DataFrame(
+        [
+            {"join_name": "low blue", "gih_wr": 0.50, "gih_games": 5000,
+             "oh_wr": 0.5, "gd_wr": 0.5, "iwd": 0.0, "ata": 5.0, "alsa": 6.0},
+            {"join_name": "high blue", "gih_wr": 0.60, "gih_games": 5000,
+             "oh_wr": 0.6, "gd_wr": 0.6, "iwd": 0.05, "ata": 2.0, "alsa": 3.0},
+        ]
+    )
+    out = merge_mod.merge(df, sl, tmp_path / "none.csv")
+    assert list(out["name"]) == ["High Blue", "Low Blue"]
