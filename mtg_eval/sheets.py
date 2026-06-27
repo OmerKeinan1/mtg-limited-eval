@@ -56,6 +56,7 @@ CARD_HEADERS = [
     "color",
     "rarity",
     "score",
+    "expert",
     "my_eval",
     "my_notes",
     "gih_wr",
@@ -245,6 +246,7 @@ def _build_card_values(df: pd.DataFrame) -> list[list]:
                 _cell(r.get("colors")),
                 _cell(r.get("rarity")),
                 _cell(r.get("score")),
+                _cell(r.get("expert_grade")),
                 _cell(r.get("my_eval")),
                 _cell(r.get("my_notes")),
                 _cell(r.get("gih_wr")),
@@ -524,15 +526,15 @@ def _format_cards_requests(sheet_id: int, n_rows: int) -> list[dict]:
                 "fields": "pixelSize",
             }
         },
-        # Tint the editable my_eval / my_notes columns (G,H -> indices 6,7).
+        # Tint the editable my_eval / my_notes columns (H,I -> indices 7,8).
         {
             "repeatCell": {
                 "range": {
                     "sheetId": sheet_id,
                     "startRowIndex": 1,
                     "endRowIndex": n_rows + 1,
-                    "startColumnIndex": 6,
-                    "endColumnIndex": 8,
+                    "startColumnIndex": 7,
+                    "endColumnIndex": 9,
                 },
                 "cell": {
                     "userEnteredFormat": {

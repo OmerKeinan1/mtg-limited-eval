@@ -20,6 +20,7 @@ from pathlib import Path
 import click
 from dotenv import load_dotenv
 
+from . import expert_grades
 from . import merge as merge_mod
 from . import scryfall, seventeen_lands
 
@@ -121,6 +122,16 @@ def main(
     except seventeen_lands.SeventeenLandsError as exc:
         click.echo(f"17Lands color ratings unavailable: {exc}", err=True)
 
+    # Expert grades scrape (best-effort; valuable early in a set's life).
+    grades: dict[str, str] = {}
+    try:
+        set_name = scryfall.fetch_set_name(set_code, CACHE_DIR, refresh=refresh)
+        grades = expert_grades.fetch_grades(set_code, set_name, CACHE_DIR, refresh=refresh)
+        if grades:
+            click.echo(f"Expert grades: {len(grades)} cards from Card Game Base")
+    except expert_grades.ExpertGradesError as exc:
+        click.echo(f"Expert grades unavailable: {exc}", err=True)
+
     # --- Establish the source of truth for prior my_eval ---
     # Prefer the live Google Sheet (where Omer edits), fall back to the CSV.
     service = None
@@ -145,7 +156,7 @@ def main(
 
     # --- Merge + preserve eval (fatal on failure) ---
     try:
-        combined = merge_mod.merge(scry_df, sl_df, eval_source)
+        combined = merge_mod.merge(scry_df, sl_df, eval_source, expert_grades=grades)
     except merge_mod.MergeError as exc:
         click.echo(f"Merge error (eval not preserved): {exc}", err=True)
         sys.exit(4)

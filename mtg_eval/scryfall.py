@@ -102,6 +102,16 @@ def _combine_faces(card: dict, field: str) -> str:
     return str(card.get(field, "") or "")
 
 
+def fetch_set_name(set_code: str, cache_dir: Path, *, refresh: bool = False) -> str:
+    """Human set name (e.g. 'Marvel Super Heroes') from the cached card data."""
+    raw = fetch_raw_cards(set_code, cache_dir, refresh=refresh)
+    for card in raw:
+        name = card.get("set_name")
+        if name:
+            return name
+    return ""
+
+
 def _card_to_row(card: dict) -> dict:
     multiface = card.get("layout") in _MULTIFACE_LAYOUTS and card.get("card_faces")
 

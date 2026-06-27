@@ -121,6 +121,10 @@ edit `SET` in `scripts/weekly-update.sh`. To change the day/time, edit the
 - 17Lands data has no collector numbers, so it joins onto Scryfall by card
   **name** (full name first, then the front-face name for double-faced and
   split cards).
+- **Expert grades** (the `expert` column) are scraped from Card Game Base's
+  per-set draft tier list and joined by name. This is best-effort and most
+  useful early in a set's life, before 17Lands has enough games; if Card Game
+  Base has no page for a set (or changes its markup) the column is left blank.
 - Your eval is preserved by `(set, collector_number)`.
 
 Double-faced, split, and adventure cards are emitted as a single row with faces

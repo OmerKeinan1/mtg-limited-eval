@@ -26,6 +26,7 @@ OUTPUT_COLUMNS = [
     "rarity",
     "colors",
     "score",
+    "expert_grade",
     "gih_wr",
     "iwd",
     "oh_wr",
@@ -122,17 +123,41 @@ def load_existing_eval(source) -> pd.DataFrame | None:
     return out
 
 
+def _attach_expert_grades(base: pd.DataFrame, grades: dict | None) -> pd.DataFrame:
+    """Join scraped expert grades onto cards by name (full, then front-face)."""
+    base = base.copy()
+    if not grades:
+        base["expert_grade"] = ""
+        return base
+    from . import seventeen_lands
+
+    def lookup(name: str) -> str:
+        for cand in (
+            seventeen_lands.normalize_name(name),
+            seventeen_lands.normalize_name(_front_name(name)),
+        ):
+            if cand in grades:
+                return grades[cand]
+        return ""
+
+    base["expert_grade"] = base["name"].map(lookup)
+    return base
+
+
 def merge(
     scryfall_df: pd.DataFrame,
     seventeen_lands_df: pd.DataFrame,
     existing_eval_source=None,
+    expert_grades: dict | None = None,
 ) -> pd.DataFrame:
     """Combine sources, derive score, and preserve my_eval / my_notes.
 
     Eval preservation key: (set, collector_number). ``existing_eval_source`` is a
-    CSV Path, a DataFrame (from the Sheet), or None.
+    CSV Path, a DataFrame (from the Sheet), or None. ``expert_grades`` is an
+    optional name -> grade dict (scraped tier list) joined by card name.
     """
     base = _attach_17lands(scryfall_df, seventeen_lands_df)
+    base = _attach_expert_grades(base, expert_grades)
 
     eval_cols = load_existing_eval(existing_eval_source)
     if eval_cols is not None:
