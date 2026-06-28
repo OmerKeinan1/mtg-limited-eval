@@ -38,6 +38,7 @@ UNCOMMONS_TAB = "Uncommons"
 COLOR_TAB = "Best Color"
 PAIRS_TAB = "Color Pairs"
 ARCHETYPES_TAB = "Archetypes"
+NOTES_TAB = "Notes"
 ALL_TABS = [
     CARDS_TAB,
     COMMONS_TAB,
@@ -45,6 +46,16 @@ ALL_TABS = [
     COLOR_TAB,
     PAIRS_TAB,
     ARCHETYPES_TAB,
+    NOTES_TAB,
+]
+
+# Section headers seeded into a fresh Notes tab (free-form below each).
+NOTES_SECTIONS = [
+    "Overperformers (beating their grade / data)",
+    "Underperformers (below expectations)",
+    "Successful decks / archetypes",
+    "Notable cards, interactions, combos",
+    "General format notes",
 ]
 
 # Cards tab columns, in display order. (set / collector_number kept at the end so
@@ -625,6 +636,77 @@ def _format_archetype_requests(sheet_id: int, header_rows: list[int]) -> list[di
 # --- top-level write ----------------------------------------------------------
 
 
+def _notes_template(set_code: str) -> tuple[list[list], list[int]]:
+    """Rows + header row indexes for a fresh Notes tab."""
+    rows: list[list] = [
+        [f"{set_code} notes  (free-form; this tab is preserved across weekly refreshes)"],
+        [""],
+    ]
+    headers: list[int] = []
+    for section in NOTES_SECTIONS:
+        headers.append(len(rows))
+        rows.append([section])
+        rows.extend([[""], [""], [""], [""]])  # room to write
+    return rows, headers
+
+
+def _seed_notes_if_empty(service, ssid: str, sheet_id: int, set_code: str) -> None:
+    """Seed the Notes tab with a template only if it has no content yet.
+
+    This is what preserves your notes: once anything is written there, reruns
+    never touch it.
+    """
+    resp = (
+        service.spreadsheets()
+        .values()
+        .get(spreadsheetId=ssid, range=f"{NOTES_TAB}!A1:A50")
+        .execute()
+    )
+    has_content = any(
+        any(str(c).strip() for c in row) for row in resp.get("values", [])
+    )
+    if has_content:
+        return
+
+    rows, header_idx = _notes_template(set_code)
+    _write_values(service, ssid, NOTES_TAB, rows)
+    reqs: list[dict] = [
+        _col_width(sheet_id, 0, 720),
+        # Title row.
+        {
+            "repeatCell": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1},
+                "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 13}}},
+                "fields": "userEnteredFormat.textFormat",
+            }
+        },
+        # Wrap long notes in column A.
+        {
+            "repeatCell": {
+                "range": {"sheetId": sheet_id, "startColumnIndex": 0, "endColumnIndex": 1},
+                "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP"}},
+                "fields": "userEnteredFormat.wrapStrategy",
+            }
+        },
+    ]
+    for h in header_idx:
+        reqs.append(
+            {
+                "repeatCell": {
+                    "range": {"sheetId": sheet_id, "startRowIndex": h, "endRowIndex": h + 1},
+                    "cell": {
+                        "userEnteredFormat": {
+                            "textFormat": {"bold": True, "fontSize": 11},
+                            "backgroundColor": {"red": 0.92, "green": 0.92, "blue": 0.92},
+                        }
+                    },
+                    "fields": "userEnteredFormat(textFormat,backgroundColor)",
+                }
+            }
+        )
+    service.spreadsheets().batchUpdate(spreadsheetId=ssid, body={"requests": reqs}).execute()
+
+
 def _write_values(service, ssid: str, tab: str, values: list[list]) -> None:
     service.spreadsheets().values().update(
         spreadsheetId=ssid,
@@ -654,9 +736,12 @@ def write_sheets(
         ).execute()
         meta = _sheet_meta(service, ssid)
 
-    # Clear prior content + charts so reruns do not stack duplicates.
+    # Clear prior content + charts so reruns do not stack duplicates. The Notes
+    # tab is never cleared -- it holds your hand-written notes.
     clear_reqs: list[dict] = []
     for tab, info in meta.items():
+        if tab == NOTES_TAB:
+            continue
         clear_reqs.append(
             {"updateCells": {"range": {"sheetId": info["sheetId"]}, "fields": "*"}}
         )
@@ -727,3 +812,6 @@ def write_sheets(
     service.spreadsheets().batchUpdate(
         spreadsheetId=ssid, body={"requests": reqs}
     ).execute()
+
+    # Seed the Notes tab once; never overwrite existing notes.
+    _seed_notes_if_empty(service, ssid, meta[NOTES_TAB]["sheetId"], set_code)
