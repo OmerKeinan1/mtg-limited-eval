@@ -347,13 +347,9 @@ def _combo_table_values(table: pd.DataFrame) -> list[list]:
 
 
 def _arch_cell(row) -> str:
-    """A guild card cell: 'Name  62%' hyperlinked to Scryfall."""
-    name = _cell(row["name"])
-    uri = _cell(row.get("scryfall_uri"))
-    wr = row.get("wr")
-    pct = f"  {round(float(wr) * 100)}%" if pd.notna(wr) else ""
-    label = f"{name}{pct}"
-    return f'=HYPERLINK("{uri}","{label}")' if uri else label
+    """A guild card cell: the card's image preview."""
+    img = _cell(row.get("image_url"))
+    return f'=IMAGE("{img}",4,98,70)' if img else _cell(row.get("name"))
 
 
 def _archetype_values(
@@ -666,8 +662,8 @@ def _format_archetype_grid_requests(
                 }
             }
         )
-        reqs.append(_col_width(sheet_id, i + 1, 175))
-    # Bold + tint the section label rows ("Top Commons" / "Top Uncommons").
+        reqs.append(_col_width(sheet_id, i + 1, 84))
+    # Bold + tint the section label rows, and size the 5 image rows beneath each.
     for r in section_rows:
         reqs.append(
             {
@@ -683,6 +679,7 @@ def _format_archetype_grid_requests(
                 }
             }
         )
+        reqs.append(_row_heights(sheet_id, r + 1, r + 6, 104))
     return reqs
 
 
