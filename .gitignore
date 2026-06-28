@@ -2,6 +2,7 @@ __pycache__/
 .venv/
 *.pyc
 .env
+.DS_Store
 
 # Raw API response cache (regenerable, can be large)
 evaluations/.cache/
