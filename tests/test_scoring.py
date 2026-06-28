@@ -83,6 +83,31 @@ def test_combo_table_names_guilds_and_excludes_splash():
     assert not out["archetype"].str.contains(r"\+").any()
 
 
+def test_combat_tricks_filters_instants_and_flash():
+    df = pd.DataFrame([
+        {"name": "Pump Spell", "type_line": "Instant", "oracle_text": "Target creature gets +3/+3.",
+         "colors": "G", "cmc": 1, "rarity": "common", "score": 3.0, "gih_wr": 0.55,
+         "scryfall_uri": "u", "image_url": "i"},
+        {"name": "Flash Beast", "type_line": "Creature - Beast", "oracle_text": "Flash. Trample.",
+         "colors": "G", "cmc": 4, "rarity": "uncommon", "score": 3.5, "gih_wr": 0.57,
+         "scryfall_uri": "u", "image_url": "i"},
+        {"name": "Sorcery Draw", "type_line": "Sorcery", "oracle_text": "Draw two cards.",
+         "colors": "U", "cmc": 3, "rarity": "common", "score": 2.5, "gih_wr": 0.52,
+         "scryfall_uri": "u", "image_url": "i"},
+        {"name": "Flashback Guy", "type_line": "Sorcery", "oracle_text": "Flashback {3}{R}.",
+         "colors": "R", "cmc": 2, "rarity": "common", "score": 2.0, "gih_wr": 0.5,
+         "scryfall_uri": "u", "image_url": "i"},
+    ])
+    out = scoring.combat_tricks(df)
+    names = list(out["name"])
+    assert "Pump Spell" in names and "Flash Beast" in names
+    assert "Sorcery Draw" not in names      # not instant, no flash
+    assert "Flashback Guy" not in names     # flashback != flash keyword
+    tt = dict(zip(out["name"], out["trick_type"]))
+    assert tt["Pump Spell"] == "Instant"
+    assert tt["Flash Beast"] == "Flash"
+
+
 def test_color_tables_empty_input():
     assert scoring.color_table(pd.DataFrame()).empty
     assert scoring.combo_table(pd.DataFrame()).empty

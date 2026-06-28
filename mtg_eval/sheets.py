@@ -38,6 +38,7 @@ UNCOMMONS_TAB = "Uncommons"
 COLOR_TAB = "Best Color"
 PAIRS_TAB = "Color Pairs"
 ARCHETYPES_TAB = "Archetypes"
+TRICKS_TAB = "Combat Tricks"
 NOTES_TAB = "Notes"
 ALL_TABS = [
     CARDS_TAB,
@@ -46,6 +47,7 @@ ALL_TABS = [
     COLOR_TAB,
     PAIRS_TAB,
     ARCHETYPES_TAB,
+    TRICKS_TAB,
     NOTES_TAB,
 ]
 
@@ -301,6 +303,28 @@ def _rarity_chart_values(df: pd.DataFrame, rarity: str) -> list[list]:
         preview = f'=IMAGE("{img}",4,98,70)' if img else ""
         card = f'=HYPERLINK("{uri}","{name}")' if uri else name
         rows.append([preview, card, round(float(r["_gih"]), 4), avg])
+    return rows
+
+
+def _tricks_values(df: pd.DataFrame) -> list[list]:
+    """Combat-tricks table: image, card link, mana, color, rarity, type, score, GIH WR."""
+    table = scoring.combat_tricks(df)
+    header = ["Preview", "Card", "CMC", "Color", "Rarity", "Type", "Score", "GIH WR"]
+    rows = [header]
+    for _, r in table.iterrows():
+        img = _cell(r.get("image_url"))
+        uri = _cell(r.get("scryfall_uri"))
+        gih = pd.to_numeric(pd.Series([r.get("gih_wr")]), errors="coerce").iloc[0]
+        rows.append([
+            f'=IMAGE("{img}",4,98,70)' if img else "",
+            f'=HYPERLINK("{uri}","{_cell(r.get("name"))}")' if uri else _cell(r.get("name")),
+            _cell(r.get("cmc")),
+            _cell(r.get("colors")),
+            _cell(r.get("rarity")),
+            _cell(r.get("trick_type")),
+            _cell(r.get("score")),
+            round(float(gih), 4) if pd.notna(gih) else "",
+        ])
     return rows
 
 
@@ -763,11 +787,13 @@ def write_sheets(
     color_vals = _color_table_values(color_tbl)
     pairs_vals = _combo_table_values(combo_tbl)
     arch_vals, arch_headers = _archetype_values(df)
+    tricks_vals = _tricks_values(df)
     _write_values(service, ssid, COMMONS_TAB, commons_vals)
     _write_values(service, ssid, UNCOMMONS_TAB, uncommons_vals)
     _write_values(service, ssid, COLOR_TAB, color_vals)
     _write_values(service, ssid, PAIRS_TAB, pairs_vals)
     _write_values(service, ssid, ARCHETYPES_TAB, arch_vals)
+    _write_values(service, ssid, TRICKS_TAB, tricks_vals)
 
     # Bar colors keyed to MTG color, in table (win-rate) order.
     color_bar_colors = [scoring.color_rgb(c) for c in color_tbl["color"]]
@@ -778,6 +804,7 @@ def write_sheets(
     reqs += _format_rarity_table_requests(meta[COMMONS_TAB]["sheetId"], len(commons_vals) - 1)
     reqs += _format_rarity_table_requests(meta[UNCOMMONS_TAB]["sheetId"], len(uncommons_vals) - 1)
     reqs += _format_archetype_requests(meta[ARCHETYPES_TAB]["sheetId"], arch_headers)
+    reqs += _format_rarity_table_requests(meta[TRICKS_TAB]["sheetId"], len(tricks_vals) - 1)
     if len(commons_vals) > 1:
         reqs.append(
             _dots_line_chart_request(

@@ -165,6 +165,54 @@ def combo_table(colors_df: pd.DataFrame) -> pd.DataFrame:
     return two.sort_values("win_rate", ascending=False).reset_index(drop=True)
 
 
+_COLOR_ORDER = {"W": 0, "U": 1, "B": 2, "R": 3, "G": 4}
+
+
+def _color_rank(colors: str) -> int:
+    colors = str(colors or "")
+    if colors == "":
+        return 100
+    if len(colors) > 1:
+        return 50
+    return _COLOR_ORDER.get(colors, 60)
+
+
+def combat_tricks(df: pd.DataFrame) -> pd.DataFrame:
+    """Instant-speed cards to play around: all Instants plus Flash cards.
+
+    Ordered by color then mana cost (what an opponent can do with X mana up),
+    then score. trick_type flags Instant / Flash / Instant + Flash.
+    """
+    cols = ["name", "cmc", "colors", "rarity", "trick_type", "score",
+            "gih_wr", "scryfall_uri", "image_url"]
+    if df is None or df.empty:
+        return pd.DataFrame(columns=cols)
+    work = df.copy()
+    tl = work.get("type_line", pd.Series([""] * len(work))).astype(str).str.lower()
+    ot = work.get("oracle_text", pd.Series([""] * len(work))).astype(str).str.lower()
+    is_instant = tl.str.contains("instant", na=False)
+    # \bflash\b matches the keyword "Flash" but not "Flashback".
+    has_flash = ot.str.contains(r"\bflash\b", na=False, regex=True)
+    work = work[is_instant | has_flash].copy()
+    if work.empty:
+        return pd.DataFrame(columns=cols)
+
+    inst = is_instant[work.index]
+    fl = has_flash[work.index]
+    work["trick_type"] = [
+        "Instant + Flash" if i and f else "Instant" if i else "Flash"
+        for i, f in zip(inst, fl)
+    ]
+    work["_c"] = work["colors"].map(_color_rank)
+    work["_cmc"] = _numeric(work["cmc"]).fillna(0.0)
+    work["_s"] = _numeric(work.get("score")).fillna(-1.0)
+    work = work.sort_values(["_c", "_cmc", "_s"], ascending=[True, True, False])
+    for c in cols:
+        if c not in work.columns:
+            work[c] = pd.NA
+    return work[cols].reset_index(drop=True)
+
+
 def guild_top_cards(
     cards_df: pd.DataFrame, pair: str, rarity: str, n: int = 5
 ) -> pd.DataFrame:
