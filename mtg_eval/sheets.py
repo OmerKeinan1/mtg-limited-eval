@@ -274,11 +274,14 @@ def _rarity_chart_values(df: pd.DataFrame, rarity: str) -> list[list]:
     """
     sub = df[df["rarity"].astype(str) == rarity].copy()
     sub["_gih"] = pd.to_numeric(sub["gih_wr"], errors="coerce")
-    sub = sub.dropna(subset=["_gih"]).sort_values("_gih", ascending=False)
+    sub = sub.dropna(subset=["_gih"])
     header = ["Preview", "Card", "GIH WR", "Set Avg"]
     if sub.empty:
         return [header]
     avg = round(float(sub["_gih"].mean()), 4)
+    # Order by card name so the chart is a true scatter (no GIH-WR trend on the
+    # x-axis); the flat Set Avg line is then the single linear reference.
+    sub = sub.sort_values("name", key=lambda s: s.astype(str).str.lower())
     rows = [header]
     for _, r in sub.iterrows():
         name = _cell(r["name"])
