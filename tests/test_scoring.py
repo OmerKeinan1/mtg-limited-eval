@@ -98,7 +98,7 @@ def test_combat_tricks_filters_instants_and_flash():
          "colors": "R", "cmc": 2, "rarity": "common", "score": 2.0, "gih_wr": 0.5,
          "scryfall_uri": "u", "image_url": "i"},
     ])
-    out = scoring.combat_tricks(df)
+    out = scoring.combat_tricks(df)  # heuristic fallback (no tag names)
     names = list(out["name"])
     assert "Pump Spell" in names and "Flash Beast" in names
     assert "Sorcery Draw" not in names      # not instant, no flash
@@ -106,6 +106,21 @@ def test_combat_tricks_filters_instants_and_flash():
     tt = dict(zip(out["name"], out["trick_type"]))
     assert tt["Pump Spell"] == "Instant"
     assert tt["Flash Beast"] == "Flash"
+
+
+def test_combat_tricks_uses_scryfall_tag_names_when_given():
+    df = pd.DataFrame([
+        {"name": "Giant Growth", "type_line": "Instant", "oracle_text": "+3/+3.",
+         "colors": "G", "cmc": 1, "rarity": "common", "score": 3.0, "gih_wr": 0.55,
+         "scryfall_uri": "u", "image_url": "i"},
+        {"name": "Thirst for Knowledge", "type_line": "Instant",
+         "oracle_text": "Draw three cards.", "colors": "U", "cmc": 3,
+         "rarity": "uncommon", "score": 3.0, "gih_wr": 0.55,
+         "scryfall_uri": "u", "image_url": "i"},
+    ])
+    # Only Giant Growth is tagged combat-trick; Thirst (an Instant) is excluded.
+    out = scoring.combat_tricks(df, trick_names={"giant growth"})
+    assert list(out["name"]) == ["Giant Growth"]
 
 
 def test_color_tables_empty_input():

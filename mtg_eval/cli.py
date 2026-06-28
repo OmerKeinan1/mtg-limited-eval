@@ -122,6 +122,15 @@ def main(
     except seventeen_lands.SeventeenLandsError as exc:
         click.echo(f"17Lands color ratings unavailable: {exc}", err=True)
 
+    # Combat-trick classification from Scryfall's oracle tags (best-effort).
+    trick_names: set[str] = set()
+    try:
+        trick_names = scryfall.fetch_combat_tricks(set_code, CACHE_DIR, refresh=refresh)
+        if trick_names:
+            click.echo(f"Combat tricks: {len(trick_names)} tagged on Scryfall")
+    except scryfall.ScryfallError as exc:
+        click.echo(f"Combat-trick tags unavailable: {exc}", err=True)
+
     # Expert grades scrape (best-effort; valuable early in a set's life).
     grades: dict[str, str] = {}
     try:
@@ -174,7 +183,7 @@ def main(
         try:
             from . import sheets
 
-            sheets.write_sheets(service, ssid, combined, set_code, sl_colors)
+            sheets.write_sheets(service, ssid, combined, set_code, sl_colors, trick_names)
             click.echo(f"Synced Google Sheet: {sheet_url}")
         except Exception as exc:  # noqa: BLE001
             sheets_failed = True

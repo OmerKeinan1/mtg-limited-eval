@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 
 # A GIH WR number needs enough games to be meaningful.
@@ -177,31 +179,52 @@ def _color_rank(colors: str) -> int:
     return _COLOR_ORDER.get(colors, 60)
 
 
-def combat_tricks(df: pd.DataFrame) -> pd.DataFrame:
-    """Instant-speed cards to play around: all Instants plus Flash cards.
+def _trick_type(type_line: str, oracle_text: str) -> str:
+    tl = str(type_line or "").lower()
+    inst = "instant" in tl
+    fl = bool(re.search(r"\bflash\b", str(oracle_text or "").lower()))
+    if inst and fl:
+        return "Instant + Flash"
+    if inst:
+        return "Instant"
+    if fl:
+        return "Flash"
+    # Fall back to the card's primary type (e.g. a tagged Sorcery / Creature).
+    head = tl.split("//")[0].split("—")[0].split("-")[0].strip()
+    return head.title() if head else "Other"
 
-    Ordered by color then mana cost (what an opponent can do with X mana up),
-    then score. trick_type flags Instant / Flash / Instant + Flash.
+
+def combat_tricks(df: pd.DataFrame, trick_names: set | None = None) -> pd.DataFrame:
+    """Combat tricks to play around, ordered by color then mana cost then score.
+
+    If ``trick_names`` (normalized card names from Scryfall's combat-trick oracle
+    tag) is given, the list is exactly those curated cards. Otherwise it falls
+    back to a heuristic: all Instants plus Flash cards.
     """
     cols = ["name", "cmc", "colors", "rarity", "trick_type", "score",
             "gih_wr", "scryfall_uri", "image_url"]
     if df is None or df.empty:
         return pd.DataFrame(columns=cols)
     work = df.copy()
-    tl = work.get("type_line", pd.Series([""] * len(work))).astype(str).str.lower()
-    ot = work.get("oracle_text", pd.Series([""] * len(work))).astype(str).str.lower()
-    is_instant = tl.str.contains("instant", na=False)
-    # \bflash\b matches the keyword "Flash" but not "Flashback".
-    has_flash = ot.str.contains(r"\bflash\b", na=False, regex=True)
-    work = work[is_instant | has_flash].copy()
+    tl = work.get("type_line", pd.Series([""] * len(work))).astype(str)
+    ot = work.get("oracle_text", pd.Series([""] * len(work))).astype(str)
+
+    if trick_names is not None:
+        def fits(name: str) -> bool:
+            n = str(name or "").strip().lower()
+            front = n.split(" // ", 1)[0]
+            return n in trick_names or front in trick_names
+        work = work[work["name"].map(fits)].copy()
+    else:
+        is_instant = tl.str.lower().str.contains("instant", na=False)
+        has_flash = ot.str.lower().str.contains(r"\bflash\b", na=False, regex=True)
+        work = work[is_instant | has_flash].copy()
+
     if work.empty:
         return pd.DataFrame(columns=cols)
 
-    inst = is_instant[work.index]
-    fl = has_flash[work.index]
     work["trick_type"] = [
-        "Instant + Flash" if i and f else "Instant" if i else "Flash"
-        for i, f in zip(inst, fl)
+        _trick_type(t, o) for t, o in zip(work["type_line"], work["oracle_text"])
     ]
     work["_c"] = work["colors"].map(_color_rank)
     work["_cmc"] = _numeric(work["cmc"]).fillna(0.0)

@@ -24,6 +24,11 @@ A spreadsheet named `<SET>_Scores` in your Google Drive with these tabs:
   two-color archetype, colored to match the MTG colors, from 17Lands data.
 - **Archetypes** - each of the ten guilds with its top 5 commons and top 5
   uncommons, with images and links.
+- **Combat Tricks** - the cards Scryfall tags as combat tricks, ordered by color
+  and mana cost (what to play around with mana up).
+- **Notes** - a free-form page for your own notes (overperformers, decks that
+  worked, etc.). Seeded once with sections, then never overwritten, so it
+  survives the weekly refresh.
 
 A CSV copy is also written to `evaluations/<SET>.csv`.
 

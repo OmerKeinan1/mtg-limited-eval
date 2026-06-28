@@ -102,6 +102,51 @@ def _combine_faces(card: dict, field: str) -> str:
     return str(card.get(field, "") or "")
 
 
+def fetch_combat_tricks(
+    set_code: str, cache_dir: Path, *, refresh: bool = False
+) -> set[str]:
+    """Normalized names of cards tagged `oracletag:combat-trick` in this set.
+
+    Uses Scryfall's community oracle tags (the authoritative combat-trick
+    classification). Returns an empty set if the set has none tagged.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path = cache_dir / f"scryfall-tricks-{set_code.lower()}.json"
+    if path.exists() and not refresh:
+        with path.open(encoding="utf-8") as fh:
+            return set(json.load(fh))
+
+    session = requests.Session()
+    session.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json"})
+    params = {
+        "q": f"oracletag:combat-trick set:{set_code}",
+        "unique": "cards",
+        "order": "name",
+    }
+    names: list[str] = []
+    url, first = SEARCH_URL, True
+    while url:
+        resp = session.get(url, params=params if first else None, timeout=30)
+        first = False
+        if resp.status_code == 404:
+            break  # no cards tagged in this set
+        if resp.status_code != 200:
+            raise ScryfallError(
+                f"Scryfall combat-trick query failed ({resp.status_code}) for "
+                f"'{set_code}'."
+            )
+        payload = resp.json()
+        names.extend(c.get("name", "") for c in payload.get("data", []))
+        url = payload.get("next_page") if payload.get("has_more") else None
+        if url:
+            time.sleep(PAGE_SLEEP_SECONDS)
+
+    normalized = sorted({n.strip().lower() for n in names if n})
+    with path.open("w", encoding="utf-8") as fh:
+        json.dump(normalized, fh)
+    return set(normalized)
+
+
 def fetch_set_name(set_code: str, cache_dir: Path, *, refresh: bool = False) -> str:
     """Human set name (e.g. 'Marvel Super Heroes') from the cached card data."""
     raw = fetch_raw_cards(set_code, cache_dir, refresh=refresh)

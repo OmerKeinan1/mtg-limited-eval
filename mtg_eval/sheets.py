@@ -306,9 +306,9 @@ def _rarity_chart_values(df: pd.DataFrame, rarity: str) -> list[list]:
     return rows
 
 
-def _tricks_values(df: pd.DataFrame) -> list[list]:
+def _tricks_values(df: pd.DataFrame, trick_names: set | None = None) -> list[list]:
     """Combat-tricks table: image, card link, mana, color, rarity, type, score, GIH WR."""
-    table = scoring.combat_tricks(df)
+    table = scoring.combat_tricks(df, trick_names)
     header = ["Preview", "Card", "CMC", "Color", "Rarity", "Type", "Score", "GIH WR"]
     rows = [header]
     for _, r in table.iterrows():
@@ -741,7 +741,8 @@ def _write_values(service, ssid: str, tab: str, values: list[list]) -> None:
 
 
 def write_sheets(
-    service, ssid: str, df: pd.DataFrame, set_code: str, colors_df: pd.DataFrame | None = None
+    service, ssid: str, df: pd.DataFrame, set_code: str,
+    colors_df: pd.DataFrame | None = None, trick_names: set | None = None,
 ) -> None:
     """Populate all tabs and (re)build the charts for one set.
 
@@ -787,7 +788,7 @@ def write_sheets(
     color_vals = _color_table_values(color_tbl)
     pairs_vals = _combo_table_values(combo_tbl)
     arch_vals, arch_headers = _archetype_values(df)
-    tricks_vals = _tricks_values(df)
+    tricks_vals = _tricks_values(df, trick_names)
     _write_values(service, ssid, COMMONS_TAB, commons_vals)
     _write_values(service, ssid, UNCOMMONS_TAB, uncommons_vals)
     _write_values(service, ssid, COLOR_TAB, color_vals)
