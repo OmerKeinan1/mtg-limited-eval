@@ -236,28 +236,53 @@ def combat_tricks(df: pd.DataFrame, trick_names: set | None = None) -> pd.DataFr
     return work[cols].reset_index(drop=True)
 
 
-def guild_top_cards(
-    cards_df: pd.DataFrame, pair: str, rarity: str, n: int = 5
-) -> pd.DataFrame:
-    """Top ``n`` cards of a rarity that fit a guild's colors, ranked by GIH WR.
+# Minimum games behind a card's in-archetype win rate to trust it.
+ARCH_MIN_GAMES = 100
 
-    A card "fits" the guild if its color identity is a subset of the guild's two
-    colors (mono-color, on-color gold, and colorless all qualify).
+
+def guild_top_cards(
+    cards_df: pd.DataFrame,
+    pair: str,
+    rarity: str,
+    arch_stats: dict | None = None,
+    n: int = 5,
+) -> pd.DataFrame:
+    """Top ``n`` cards of a rarity for a guild, by in-archetype win rate.
+
+    If ``arch_stats`` ({normalized_name: (gih_wr, games)} from 17Lands filtered
+    to this guild's deck colors) is given, rank by how the card performs *in that
+    archetype* (with a games floor). Otherwise fall back to overall GIH WR among
+    cards whose color identity fits the guild.
+
+    Returns columns name, wr (the win rate used), scryfall_uri, image_url.
     """
-    cols = ["name", "gih_wr", "score", "scryfall_uri", "image_url"]
+    cols = ["name", "wr", "scryfall_uri", "image_url"]
     if cards_df is None or cards_df.empty:
         return pd.DataFrame(columns=cols)
-    allowed = set(pair)
     df = cards_df[cards_df["rarity"].astype(str) == rarity].copy()
-    df["_gih"] = _numeric(df.get("gih_wr"))
-    df = df.dropna(subset=["_gih"])
 
-    def fits(colors) -> bool:
-        chars = {c for c in str(colors or "") if c in MTG_RGB}
-        return chars.issubset(allowed)
+    if arch_stats:
+        def arch_wr(name: str):
+            n_ = str(name or "").strip().lower()
+            stat = arch_stats.get(n_) or arch_stats.get(n_.split(" // ", 1)[0])
+            if stat and stat[1] >= ARCH_MIN_GAMES:
+                return stat[0]
+            return None
 
-    df = df[df["colors"].map(fits)]
-    df = df.sort_values("_gih", ascending=False).head(n)
+        df["wr"] = df["name"].map(arch_wr)
+        df = df.dropna(subset=["wr"])
+    else:
+        allowed = set(pair)
+
+        def fits(colors) -> bool:
+            chars = {c for c in str(colors or "") if c in MTG_RGB}
+            return chars.issubset(allowed)
+
+        df["wr"] = _numeric(df.get("gih_wr"))
+        df = df.dropna(subset=["wr"])
+        df = df[df["colors"].map(fits)]
+
+    df = df.sort_values("wr", ascending=False).head(n)
     for c in cols:
         if c not in df.columns:
             df[c] = pd.NA

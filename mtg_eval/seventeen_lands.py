@@ -203,3 +203,63 @@ def fetch_colors(
 def empty_colors() -> pd.DataFrame:
     """Schema-preserving empty color frame."""
     return pd.DataFrame(columns=COLOR_COLUMNS)
+
+
+def fetch_archetype(
+    set_code: str,
+    colors: str,
+    cache_dir: Path,
+    *,
+    fmt: str = "PremierDraft",
+    refresh: bool = False,
+    end_date: str | None = None,
+) -> dict[str, tuple[float, int]]:
+    """Per-card GIH WR within a deck-color archetype (e.g. colors='WU').
+
+    Returns {normalized_name: (gih_wr, gih_games)} for cards played in decks of
+    those colors. Empty if the archetype has no data.
+    """
+    import csv
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path = cache_dir / f"17lands-arch-{set_code.lower()}-{fmt.lower()}-{colors.upper()}.csv"
+    if path.exists() and not refresh:
+        out: dict[str, tuple[float, int]] = {}
+        with path.open(encoding="utf-8") as fh:
+            for row in csv.DictReader(fh):
+                out[row["join_name"]] = (float(row["gih_wr"]), int(row["gih_games"]))
+        return out
+
+    if end_date is None:
+        end_date = dt.date.today().isoformat()
+    session = requests.Session()
+    session.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json"})
+    params = {
+        "expansion": set_code.upper(),
+        "format": fmt,
+        "colors": colors.upper(),
+        "start_date": DEFAULT_START_DATE,
+        "end_date": end_date,
+    }
+    resp = session.get(DATA_URL, params=params, timeout=30)
+    if resp.status_code == 429:
+        raise SeventeenLandsError("17Lands returned 429 on archetype data; stopping.")
+    if resp.status_code != 200:
+        raise SeventeenLandsError(
+            f"17Lands archetype data failed ({resp.status_code}) for {set_code}/{colors}."
+        )
+
+    out = {}
+    for c in resp.json():
+        wr = c.get("ever_drawn_win_rate")
+        games = c.get("ever_drawn_game_count") or 0
+        if wr is None:
+            continue
+        out[normalize_name(c.get("name", ""))] = (float(wr), int(games))
+
+    with path.open("w", encoding="utf-8", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["join_name", "gih_wr", "gih_games"])
+        for k, (wr, games) in out.items():
+            w.writerow([k, wr, games])
+    return out

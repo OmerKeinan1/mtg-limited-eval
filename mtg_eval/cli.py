@@ -15,6 +15,7 @@ Exit codes:
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 import click
@@ -22,7 +23,7 @@ from dotenv import load_dotenv
 
 from . import expert_grades
 from . import merge as merge_mod
-from . import scryfall, seventeen_lands
+from . import scoring, scryfall, seventeen_lands
 
 CACHE_DIR = Path("evaluations/.cache")
 
@@ -183,7 +184,22 @@ def main(
         try:
             from . import sheets
 
-            sheets.write_sheets(service, ssid, combined, set_code, sl_colors, trick_names)
+            # Per-guild card performance (best-effort): one 17Lands call per pair,
+            # filtered to that archetype's deck colors.
+            arch_data: dict[str, dict] = {}
+            try:
+                for pair, _name in scoring.GUILD_PAIRS:
+                    arch_data[pair] = seventeen_lands.fetch_archetype(
+                        set_code, pair, CACHE_DIR, fmt=sl_format, refresh=refresh
+                    )
+                    time.sleep(0.1)
+                click.echo(f"Archetype card data: {len(arch_data)} guilds")
+            except seventeen_lands.SeventeenLandsError as exc:
+                click.echo(f"Archetype data partial/unavailable: {exc}", err=True)
+
+            sheets.write_sheets(
+                service, ssid, combined, set_code, sl_colors, trick_names, arch_data
+            )
             click.echo(f"Synced Google Sheet: {sheet_url}")
         except Exception as exc:  # noqa: BLE001
             sheets_failed = True

@@ -156,18 +156,36 @@ def _cards():
     )
 
 
-def test_guild_top_cards_filters_by_color_identity():
-    out = scoring.guild_top_cards(_cards(), "WU", "common", 5)
+def test_guild_top_cards_color_fallback_when_no_archetype_data():
+    out = scoring.guild_top_cards(_cards(), "WU", "common", n=5)
     names = list(out["name"])
     # WU, W, U and colorless qualify; off-color black does not.
     assert "B common" not in names
     assert "WU gold" in names and "Colorless" in names
-    # Ranked by GIH WR desc -> WU gold (0.62) first.
+    # With no archetype data, ranked by overall GIH WR -> WU gold (0.62) first.
     assert names[0] == "WU gold"
 
 
 def test_guild_top_cards_respects_rarity_and_limit():
-    out = scoring.guild_top_cards(_cards(), "WU", "uncommon", 5)
+    out = scoring.guild_top_cards(_cards(), "WU", "uncommon", n=5)
     assert list(out["name"]) == ["WU uncommon"]
-    capped = scoring.guild_top_cards(_cards(), "WU", "common", 2)
+    capped = scoring.guild_top_cards(_cards(), "WU", "common", n=2)
     assert len(capped) == 2
+
+
+def test_guild_top_cards_ranks_by_in_archetype_winrate():
+    cards = _cards()
+    # In WU decks, "W common A" overperforms despite a lower overall GIH WR.
+    arch = {
+        "w common a": (0.99, 5000),
+        "u common b": (0.50, 5000),
+        "wu gold": (0.40, 5000),
+        "colorless": (0.45, 5000),
+    }
+    out = scoring.guild_top_cards(cards, "WU", "common", arch_stats=arch, n=5)
+    assert out.iloc[0]["name"] == "W common A"
+    # Cards below the games floor are excluded.
+    out2 = scoring.guild_top_cards(
+        cards, "WU", "common", arch_stats={"w common a": (0.99, 10)}, n=5
+    )
+    assert "W common A" not in list(out2["name"])

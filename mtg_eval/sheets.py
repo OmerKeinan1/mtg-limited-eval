@@ -346,56 +346,49 @@ def _combo_table_values(table: pd.DataFrame) -> list[list]:
     return rows
 
 
-def _img_formula(url: str) -> str:
-    return f'=IMAGE("{url}",4,98,70)' if url else ""
-
-
-def _link_formula(uri: str, label: str) -> str:
+def _arch_cell(row) -> str:
+    """A guild card cell: 'Name  62%' hyperlinked to Scryfall."""
+    name = _cell(row["name"])
+    uri = _cell(row.get("scryfall_uri"))
+    wr = row.get("wr")
+    pct = f"  {round(float(wr) * 100)}%" if pd.notna(wr) else ""
+    label = f"{name}{pct}"
     return f'=HYPERLINK("{uri}","{label}")' if uri else label
 
 
-def _archetype_values(df: pd.DataFrame) -> tuple[list[list], list[int]]:
-    """Per-guild top-5 commons and uncommons, laid out side by side with images.
+def _archetype_values(
+    df: pd.DataFrame, arch_data: dict | None = None
+) -> tuple[list[list], list[str], list[int]]:
+    """Wide grid: one column per guild, rows are the top picks (by in-archetype WR).
 
-    Returns (values, header_row_indexes). Each guild is a titled block:
-        <Guild (XY)>
-        Top Commons              | Top Uncommons
-        [img] name        GIH WR | [img] name        GIH WR   (x5)
-    Columns: 0 img / 1 name / 2 gih  (commons) and 4 img / 5 name / 6 gih (uncommons).
+    Returns (rows, guild_pairs, section_row_indexes). Layout:
+        (blank) | Azorius (WU) | Orzhov (WB) | ... (10 guild columns)
+        Top Commons
+        1..5    | card 62% per guild ...
+        Top Uncommons
+        1..5    | ...
     """
-    rows: list[list] = []
-    header_rows: list[int] = []
-    blank = ["", "", "", "", "", "", ""]
+    guilds = scoring.GUILD_PAIRS
+    arch_data = arch_data or {}
+    header = [""] + [f"{name} ({pair})" for pair, name in guilds]
+    rows: list[list] = [header]
+    section_rows: list[int] = []
 
-    for pair, name in scoring.GUILD_PAIRS:
-        commons = scoring.guild_top_cards(df, pair, "common", 5)
-        uncommons = scoring.guild_top_cards(df, pair, "uncommon", 5)
-
-        header_rows.append(len(rows))
-        rows.append([f"{name} ({pair})", "", "", "", "", "", ""])
-        rows.append(["Top Commons", "", "", "", "Top Uncommons", "", ""])
-
+    for title, rarity in (("Top Commons", "common"), ("Top Uncommons", "uncommon")):
+        lists = {
+            pair: scoring.guild_top_cards(df, pair, rarity, arch_data.get(pair), 5)
+            for pair, _ in guilds
+        }
+        section_rows.append(len(rows))
+        rows.append([title] + [""] * len(guilds))
         for i in range(5):
-            left = ["", "", ""]
-            if i < len(commons):
-                c = commons.iloc[i]
-                left = [
-                    _img_formula(_cell(c["image_url"])),
-                    _link_formula(_cell(c["scryfall_uri"]), _cell(c["name"])),
-                    round(float(c["gih_wr"]), 4) if pd.notna(c["gih_wr"]) else "",
-                ]
-            right = ["", "", ""]
-            if i < len(uncommons):
-                u = uncommons.iloc[i]
-                right = [
-                    _img_formula(_cell(u["image_url"])),
-                    _link_formula(_cell(u["scryfall_uri"]), _cell(u["name"])),
-                    round(float(u["gih_wr"]), 4) if pd.notna(u["gih_wr"]) else "",
-                ]
-            rows.append(left + [""] + right)
-        rows.append(blank)
+            row = [str(i + 1)]
+            for pair, _ in guilds:
+                lst = lists[pair]
+                row.append(_arch_cell(lst.iloc[i]) if i < len(lst) else "")
+            rows.append(row)
 
-    return rows, header_rows
+    return rows, [pair for pair, _ in guilds], section_rows
 
 
 # --- chart + format requests --------------------------------------------------
@@ -638,22 +631,58 @@ def _format_rarity_table_requests(sheet_id: int, n_rows: int) -> list[dict]:
     ]
 
 
-def _format_archetype_requests(sheet_id: int, header_rows: list[int]) -> list[dict]:
-    """Archetypes: size both preview columns, bold guild titles, tall image rows."""
-    reqs = [_col_width(sheet_id, 0, 80), _col_width(sheet_id, 4, 80)]
-    for h in header_rows:
-        # Bold the guild title row.
+def _format_archetype_grid_requests(
+    sheet_id: int, guild_pairs: list[str], section_rows: list[int], n_rows: int
+) -> list[dict]:
+    """Wide archetype grid: freeze header row + label column, color guild headers."""
+    reqs: list[dict] = [
+        {
+            "updateSheetProperties": {
+                "properties": {
+                    "sheetId": sheet_id,
+                    "gridProperties": {"frozenRowCount": 1, "frozenColumnCount": 1},
+                },
+                "fields": "gridProperties(frozenRowCount,frozenColumnCount)",
+            }
+        },
+        _col_width(sheet_id, 0, 80),
+    ]
+    # One colored, bold header cell per guild.
+    for i, pair in enumerate(guild_pairs):
+        rgb = scoring.color_rgb(pair)
+        dark = (rgb["red"] * 0.299 + rgb["green"] * 0.587 + rgb["blue"] * 0.114) < 0.55
+        text_fmt = {"bold": True}
+        if dark:
+            text_fmt["foregroundColor"] = {"red": 1, "green": 1, "blue": 1}
         reqs.append(
             {
                 "repeatCell": {
-                    "range": {"sheetId": sheet_id, "startRowIndex": h, "endRowIndex": h + 1},
-                    "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 12}}},
-                    "fields": "userEnteredFormat.textFormat",
+                    "range": {
+                        "sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1,
+                        "startColumnIndex": i + 1, "endColumnIndex": i + 2,
+                    },
+                    "cell": {"userEnteredFormat": {"backgroundColor": rgb, "textFormat": text_fmt}},
+                    "fields": "userEnteredFormat(backgroundColor,textFormat)",
                 }
             }
         )
-        # The five card rows sit at h+2 .. h+6.
-        reqs.append(_row_heights(sheet_id, h + 2, h + 7, 104))
+        reqs.append(_col_width(sheet_id, i + 1, 175))
+    # Bold + tint the section label rows ("Top Commons" / "Top Uncommons").
+    for r in section_rows:
+        reqs.append(
+            {
+                "repeatCell": {
+                    "range": {"sheetId": sheet_id, "startRowIndex": r, "endRowIndex": r + 1},
+                    "cell": {
+                        "userEnteredFormat": {
+                            "textFormat": {"bold": True},
+                            "backgroundColor": {"red": 0.92, "green": 0.92, "blue": 0.92},
+                        }
+                    },
+                    "fields": "userEnteredFormat(textFormat,backgroundColor)",
+                }
+            }
+        )
     return reqs
 
 
@@ -743,6 +772,7 @@ def _write_values(service, ssid: str, tab: str, values: list[list]) -> None:
 def write_sheets(
     service, ssid: str, df: pd.DataFrame, set_code: str,
     colors_df: pd.DataFrame | None = None, trick_names: set | None = None,
+    arch_data: dict | None = None,
 ) -> None:
     """Populate all tabs and (re)build the charts for one set.
 
@@ -787,7 +817,7 @@ def write_sheets(
     combo_tbl = scoring.combo_table(colors_df)
     color_vals = _color_table_values(color_tbl)
     pairs_vals = _combo_table_values(combo_tbl)
-    arch_vals, arch_headers = _archetype_values(df)
+    arch_vals, arch_guilds, arch_sections = _archetype_values(df, arch_data)
     tricks_vals = _tricks_values(df, trick_names)
     _write_values(service, ssid, COMMONS_TAB, commons_vals)
     _write_values(service, ssid, UNCOMMONS_TAB, uncommons_vals)
@@ -804,7 +834,9 @@ def write_sheets(
     reqs: list[dict] = _format_cards_requests(meta[CARDS_TAB]["sheetId"], len(df))
     reqs += _format_rarity_table_requests(meta[COMMONS_TAB]["sheetId"], len(commons_vals) - 1)
     reqs += _format_rarity_table_requests(meta[UNCOMMONS_TAB]["sheetId"], len(uncommons_vals) - 1)
-    reqs += _format_archetype_requests(meta[ARCHETYPES_TAB]["sheetId"], arch_headers)
+    reqs += _format_archetype_grid_requests(
+        meta[ARCHETYPES_TAB]["sheetId"], arch_guilds, arch_sections, len(arch_vals)
+    )
     reqs += _format_rarity_table_requests(meta[TRICKS_TAB]["sheetId"], len(tricks_vals) - 1)
     if len(commons_vals) > 1:
         reqs.append(
